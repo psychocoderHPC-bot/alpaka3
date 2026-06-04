@@ -33,6 +33,7 @@
 #include "alpaka/mem/LinearizedIdxGenerator.hpp"
 #include "alpaka/mem/concepts/IDataStorage.hpp"
 #include "alpaka/onAcc/Acc.hpp"
+#include "alpaka/onAcc/lockstep.hpp"
 #include "alpaka/onAcc/SimdAlgo.hpp"
 #include "alpaka/onAcc/WorkerGroup.hpp"
 #include "alpaka/onAcc/atomic.hpp"
