@@ -16,7 +16,7 @@ namespace alpaka::onAcc::internal
     ALPAKA_FN_HOST_ACC constexpr auto delinearize(T_LogicalExtent const& extents, std::integral auto linearIdx)
     {
         using VecType = typename T_LogicalExtent::UniVec;
-        using IdxType = typename VecType::type;
+        using IdxType = typename VecType::value_type;
 
         auto idx = VecType::fill(0u);
         auto remaining = static_cast<IdxType>(linearIdx);
@@ -97,14 +97,16 @@ namespace alpaka::onAcc::internal
     template<uint32_t T_width, typename T_LogicalExtent>
     ALPAKA_FN_HOST_ACC constexpr auto makeLaneIdx(
         T_LogicalExtent const& logicalExtent,
-        typename T_LogicalExtent::type linearIdxBegin,
-        typename T_LogicalExtent::type linearStride)
+        typename T_LogicalExtent::value_type linearIdxBegin,
+        typename T_LogicalExtent::value_type linearStride)
     {
         using IdxVec = typename T_LogicalExtent::UniVec;
         std::array<IdxVec, T_width> idx{};
 
         for(uint32_t lane = 0u; lane < T_width; ++lane)
-            idx[lane] = delinearize(logicalExtent, linearIdxBegin + linearStride * static_cast<typename T_LogicalExtent::type>(lane));
+            idx[lane] = delinearize(
+                logicalExtent,
+                linearIdxBegin + linearStride * static_cast<typename T_LogicalExtent::value_type>(lane));
 
         return idx;
     }
@@ -112,10 +114,10 @@ namespace alpaka::onAcc::internal
     template<uint32_t T_width, typename T_IdxVec>
     ALPAKA_FN_HOST_ACC constexpr auto makeLockstepIndex(
         std::array<T_IdxVec, T_width> const& laneIdx,
-        typename T_IdxVec::type linearIdxBegin,
-        typename T_IdxVec::type linearStride)
+        typename T_IdxVec::value_type linearIdxBegin,
+        typename T_IdxVec::value_type linearStride)
     {
-        using IdxType = typename T_IdxVec::type;
+        using IdxType = typename T_IdxVec::value_type;
 
         if constexpr(T_width == 1u)
         {
@@ -124,18 +126,16 @@ namespace alpaka::onAcc::internal
         else
         {
             using SimdType = Simd<IdxType, T_width>;
-            auto mdIdx = Vec<SimdType, T_IdxVec::dim()>{[&](auto dimIdx) constexpr
-            {
-                return SimdType{[&](auto laneIdxConst) constexpr
+            auto mdIdx = Vec<SimdType, T_IdxVec::dim()>{
+                [&](auto dimIdx) constexpr
                 {
-                    return laneIdx[static_cast<uint32_t>(laneIdxConst)][static_cast<uint32_t>(dimIdx)];
+                    return SimdType{
+                        [&](auto laneIdxConst) constexpr
+                        { return laneIdx[static_cast<uint32_t>(laneIdxConst)][static_cast<uint32_t>(dimIdx)]; }};
                 }};
-            }};
 
             auto linearIdx = SimdType{[&](auto laneIdxConst) constexpr
-            {
-                return linearIdxBegin + linearStride * static_cast<IdxType>(laneIdxConst);
-            }};
+                                      { return linearIdxBegin + linearStride * static_cast<IdxType>(laneIdxConst); }};
 
             return LockstepIndex<IdxType, T_IdxVec::dim(), T_width>{mdIdx, linearIdx};
         }

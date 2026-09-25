@@ -4,6 +4,7 @@
 
 #include <alpaka/alpaka.hpp>
 
+#include <alpakaTest/deviceHelper.hpp>
 #include <catch2/catch_template_test_macros.hpp>
 #include <catch2/catch_test_macros.hpp>
 
@@ -20,10 +21,8 @@ namespace
         if constexpr(alpaka::concepts::Simd<std::decay_t<decltype(value)>>)
         {
             using SimdType = std::decay_t<decltype(value)>;
-            return Simd<int32_t, SimdType::width()>{[&](auto laneIdx) constexpr
-            {
-                return static_cast<int32_t>(value[static_cast<uint32_t>(laneIdx)]);
-            }};
+            return Simd<int32_t, SimdType::width()>{
+                [&](auto laneIdx) constexpr { return static_cast<int32_t>(value[static_cast<uint32_t>(laneIdx)]); }};
         }
         else
         {
@@ -60,17 +59,12 @@ namespace
             auto tmp = scope.template var<int32_t>();
 
             scope.concurrent(
-                [](auto const& idx, auto tmpRef)
-                {
-                    tmpRef = linearValue(idx.linear()) + int32_t{1};
-                },
+                [](auto const& idx, auto tmpRef) { tmpRef = linearValue(idx.linear()) + int32_t{1}; },
                 tmp);
 
             scope.concurrent(
                 [](auto const& idx, auto tmpRef, auto outRef)
-                {
-                    outRef = tmpRef.load() * int32_t{2} - linearValue(idx.linear());
-                },
+                { outRef = tmpRef.load() * int32_t{2} - linearValue(idx.linear()); },
                 tmp,
                 onAcc::map(out));
         }
@@ -79,17 +73,10 @@ namespace
     template<typename T_LogicalExtent, typename T_WorkGroup, typename T_FrameExtent>
     void runCase(auto cfg, T_WorkGroup const& workGroup, T_FrameExtent const& frameExtent, char const* label)
     {
-        auto deviceSpec = cfg[object::deviceSpec];
-        auto exec = cfg[object::exec];
+        auto deviceExec = test::getDeviceExecutorOrSkipTest(cfg);
+        onHost::Device device = test::getDevice(deviceExec);
+        concepts::Executor auto exec = test::getExecutor(deviceExec);
 
-        auto devSelector = onHost::makeDeviceSelector(deviceSpec);
-        if(!devSelector.isAvailable())
-        {
-            SUCCEED("No device available for " << deviceSpec.getName());
-            return;
-        }
-
-        auto device = devSelector.makeDevice(0);
         auto queue = device.makeQueue();
         auto const logicalExtent = Vec{T_LogicalExtent{}};
         auto const resolvedFrameExtent = [&]
@@ -100,7 +87,6 @@ namespace
                 return frameExtent;
         }();
 
-        INFO("device spec: " << getName(deviceSpec));
         INFO("device name: " << device.getName());
         INFO("executor   : " << exec.getName());
         INFO("case       : " << label);
@@ -134,5 +120,9 @@ TEMPLATE_LIST_TEST_CASE("lockstep distributed vars", "[kernel][lockstep]", TestB
     runCase<CVec<uint32_t, 9u, 11u>>(cfg, onAcc::worker::threadsInBlock, CVec<uint32_t, 2u, 4u>{}, "threadsInBlock");
     runCase<CVec<uint32_t, 17u, 19u>>(cfg, ManualLinearGroup<1u>{}, CVec<uint32_t, 1u>{}, "manual");
 
-    runCase<CVec<uint32_t, 17u, 19u>>(cfg, onAcc::worker::linearThreadsInWarp, WarpFrameExtent{}, "linearThreadsInWarp");
+    runCase<CVec<uint32_t, 17u, 19u>>(
+        cfg,
+        onAcc::worker::linearThreadsInWarp,
+        WarpFrameExtent{},
+        "linearThreadsInWarp");
 }

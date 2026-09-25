@@ -71,9 +71,9 @@ namespace alpaka::onAcc
     struct LockstepScope
     {
         using LogicalExtent = T_LogicalExtent;
-        using IdxType = typename T_LogicalExtent::type;
+        using IdxType = typename T_LogicalExtent::value_type;
         using WorkerSpace = internal::WorkerSpace_t<T_Acc, T_WorkGroup>;
-        using WorkerExtent = decltype(std::declval<WorkerSpace const&>().size());
+        using WorkerExtent = decltype(std::declval<WorkerSpace const&>().getThreadCount());
         static constexpr bool hasLazyGetThreadSpace
             = requires(T_WorkGroup const& workGroup, T_Acc const& acc) { workGroup.getThreadSpace(acc); };
 
@@ -103,7 +103,7 @@ namespace alpaka::onAcc
             if constexpr(hasLazyGetThreadSpace)
                 return m_workGroup.getThreadSpace(m_acc);
             else
-                return ThreadSpace{m_workGroup.idx(m_acc), m_workGroup.size(m_acc)};
+                return ThreadSpace{m_workGroup.getThreadIdx(m_acc), m_workGroup.getThreadCount(m_acc)};
         }
 
         template<typename T>
@@ -125,10 +125,8 @@ namespace alpaka::onAcc
         template<typename T_ValueType = void, typename T_Fn, typename T_Arg0, typename... T_Args>
         ALPAKA_FN_ACC constexpr void concurrent(T_Fn&& fn, T_Arg0&& arg0, T_Args&&... args) const
         {
-            using ValueType = std::conditional_t<
-                std::is_void_v<T_ValueType>,
-                internal::BindValueType_t<T_Arg0>,
-                T_ValueType>;
+            using ValueType
+                = std::conditional_t<std::is_void_v<T_ValueType>, internal::BindValueType_t<T_Arg0>, T_ValueType>;
             constexpr uint32_t simdWidth = calcSimdWidth<ValueType>();
             foreachImpl<simdWidth>(ALPAKA_FORWARD(fn), ALPAKA_FORWARD(arg0), ALPAKA_FORWARD(args)...);
         }
@@ -149,8 +147,8 @@ namespace alpaka::onAcc
             auto const logicalExtent = m_logicalExtent;
             auto const logicalSize = logicalExtent.product();
             auto const workerSpace = getWorkerSpace();
-            auto const workerIdx = linearize(workerSpace.size(), workerSpace.idx());
-            auto const workerCount = workerSpace.size().product();
+            auto const workerIdx = linearize(workerSpace.getThreadCount(), workerSpace.getThreadIdx());
+            auto const workerCount = workerSpace.getThreadCount().product();
 
             uint32_t localSlot = 0u;
             for(IdxType linearIdx = workerIdx; linearIdx < logicalSize;)
@@ -190,9 +188,9 @@ namespace alpaka::onAcc
         auto const& workGroup,
         T_LogicalExtent const& logicalExtent)
     {
-        return LockstepScope<std::decay_t<ALPAKA_TYPEOF(acc)>, T_LogicalExtent, std::decay_t<ALPAKA_TYPEOF(workGroup)>>{
-            acc,
-            workGroup,
-            logicalExtent};
+        return LockstepScope<
+            std::decay_t<ALPAKA_TYPEOF(acc)>,
+            T_LogicalExtent,
+            std::decay_t<ALPAKA_TYPEOF(workGroup)>>{acc, workGroup, logicalExtent};
     }
 } // namespace alpaka::onAcc

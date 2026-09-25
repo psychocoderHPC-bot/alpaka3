@@ -14,8 +14,8 @@ namespace alpaka::onAcc::internal
     struct WorkerSpaceType
     {
         using type = decltype(ThreadSpace{
-            std::declval<T_WorkGroup const&>().idx(std::declval<T_Acc const&>()),
-            std::declval<T_WorkGroup const&>().size(std::declval<T_Acc const&>())});
+            std::declval<T_WorkGroup const&>().getThreadIdx(std::declval<T_Acc const&>()),
+            std::declval<T_WorkGroup const&>().getThreadCount(std::declval<T_Acc const&>())});
     };
 
     template<typename T_Acc, typename T_WorkGroup>
