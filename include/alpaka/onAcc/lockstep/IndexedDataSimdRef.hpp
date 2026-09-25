@@ -16,7 +16,7 @@ namespace alpaka::onAcc::internal
     template<typename T_Data, typename T_IdxVec, uint32_t T_width>
     struct IndexedDataSimdRef
     {
-        using value_type = alpaka::trait::GetValueType_t<std::decay_t<T_Data>>;
+        using value_type = alpaka::GetValueType_t<std::decay_t<T_Data>>;
 
         static consteval uint32_t width()
         {
@@ -25,8 +25,8 @@ namespace alpaka::onAcc::internal
 
         constexpr auto load() const
         {
-            return Simd<value_type, T_width>{
-                [&](auto laneIdx) constexpr { return (*data)[idx[static_cast<uint32_t>(laneIdx)]]; }};
+            return Simd<value_type, T_width>{[&](auto laneIdx) constexpr
+                                             { return (*data)[idx[static_cast<uint32_t>(laneIdx)]]; }};
         }
 
         template<typename T_Other, typename T_Storage>

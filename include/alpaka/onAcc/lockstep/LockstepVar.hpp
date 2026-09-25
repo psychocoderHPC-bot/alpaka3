@@ -48,5 +48,5 @@ namespace alpaka::onAcc::internal
     using BindValueType_t = std::conditional_t<
         isLockstepVar_v<T>,
         typename std::remove_cvref_t<T>::value_type,
-        alpaka::trait::GetValueType_t<std::decay_t<T>>>;
+        alpaka::GetValueType_t<std::decay_t<T>>>;
 } // namespace alpaka::onAcc::internal

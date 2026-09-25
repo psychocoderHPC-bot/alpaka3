@@ -62,9 +62,7 @@ namespace alpaka::onAcc
     template<typename T_Data>
     constexpr auto map(T_Data&& data)
     {
-        return MappedData<std::decay_t<T_Data>, internal::IdentityMap>{
-            ALPAKA_FORWARD(data),
-            internal::IdentityMap{}};
+        return MappedData<std::decay_t<T_Data>, internal::IdentityMap>{ALPAKA_FORWARD(data), internal::IdentityMap{}};
     }
 
     template<typename T_Data, typename T_Offset>
