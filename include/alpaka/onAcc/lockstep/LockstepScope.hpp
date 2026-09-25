@@ -41,6 +41,21 @@ namespace alpaka::onAcc
             return std::max(getArchSimdWidth<T_ValueType>(Api{}, DeviceKind{}), 1u);
         }
 
+        template<typename T_ExplicitValueType, typename T_Arg>
+        struct ConcurrentValueType
+        {
+            using type = T_ExplicitValueType;
+        };
+
+        template<typename T_Arg>
+        struct ConcurrentValueType<void, T_Arg>
+        {
+            using type = BindValueType_t<T_Arg>;
+        };
+
+        template<typename T_ExplicitValueType, typename T_Arg>
+        using ConcurrentValueType_t = typename ConcurrentValueType<T_ExplicitValueType, T_Arg>::type;
+
         template<typename T_Acc, typename T_ValueType, alpaka::concepts::CVector T_LogicalExtent>
         consteval uint32_t getLockstepSimdWidth(T_LogicalExtent const&)
         {
@@ -125,8 +140,7 @@ namespace alpaka::onAcc
         template<typename T_ValueType = void, typename T_Fn, typename T_Arg0, typename... T_Args>
         ALPAKA_FN_ACC constexpr void concurrent(T_Fn&& fn, T_Arg0&& arg0, T_Args&&... args) const
         {
-            using ValueType
-                = std::conditional_t<std::is_void_v<T_ValueType>, internal::BindValueType_t<T_Arg0>, T_ValueType>;
+            using ValueType = internal::ConcurrentValueType_t<T_ValueType, T_Arg0>;
             constexpr uint32_t simdWidth = calcSimdWidth<ValueType>();
             foreachImpl<simdWidth>(ALPAKA_FORWARD(fn), ALPAKA_FORWARD(arg0), ALPAKA_FORWARD(args)...);
         }
@@ -155,10 +169,9 @@ namespace alpaka::onAcc
             {
                 if constexpr(T_width > 1u)
                 {
-                    auto const lastLinearIdx
-                        = linearIdx + static_cast<IdxType>(T_width - 1u) * static_cast<IdxType>(workerCount);
+                    auto const remainingAfterFirstLane = logicalSize - linearIdx - IdxType{1u};
 
-                    if(lastLinearIdx < logicalSize)
+                    if(remainingAfterFirstLane / workerCount >= static_cast<IdxType>(T_width - 1u))
                     {
                         auto laneIdx = internal::makeLaneIdx<T_width>(logicalExtent, linearIdx, workerCount);
                         auto idx = internal::makeLockstepIndex<T_width>(laneIdx, linearIdx, workerCount);

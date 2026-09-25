@@ -62,11 +62,11 @@ namespace
                 [](auto const& idx, auto tmpRef) { tmpRef = linearValue(idx.linear()) + int32_t{1}; },
                 tmp);
 
-            scope.concurrent(
-                [](auto const& idx, auto tmpRef, auto outRef)
+            scope.template concurrent<int32_t>(
+                [](auto const& idx, auto outRef, auto tmpRef)
                 { outRef = tmpRef.load() * int32_t{2} - linearValue(idx.linear()); },
-                tmp,
-                onAcc::map(out));
+                onAcc::map(out),
+                tmp);
         }
     };
 
