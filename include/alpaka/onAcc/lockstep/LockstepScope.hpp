@@ -263,7 +263,7 @@ namespace alpaka::onAcc
     template<alpaka::concepts::CVector T_LogicalExtent>
     ALPAKA_FN_HOST_ACC constexpr auto makeLockstep(
         auto const& acc,
-        auto const& workGroup,
+        auto const workGroup,
         T_LogicalExtent const& logicalExtent)
     {
         return LockstepScope<
