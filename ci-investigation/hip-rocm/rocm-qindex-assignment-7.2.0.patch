@@ -1,0 +1,11 @@
+--- a/rocdevice.cpp	2026-09-29 21:22:13.192484443 +0200
++++ b/rocdevice.cpp	2026-09-29 21:22:13.224484015 +0200
+@@ -3044,7 +3044,7 @@
+   qInfo.refCount = 1;
+   ClPrint(amd::LOG_INFO, amd::LOG_QUEUE, "acquireQueue refCount: %p (%d)",
+           result.first->first->base_address, result.first->second.refCount);
+-  if (!managed && (cuMask.size() == 0) && (qIndex = QueuePriority::Normal)) {
++  if (!managed && (cuMask.size() == 0) && qIndex == QueuePriority::Normal) {
+     num_normal_queues_++;
+   }
+   return queue;
