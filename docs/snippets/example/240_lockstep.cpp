@@ -18,9 +18,7 @@ using namespace alpaka;
 // BEGIN-TUTORIAL-lockstepKernel
 struct LockstepDistributedVarKernel
 {
-    ALPAKA_FN_ACC void operator()(
-        onAcc::concepts::Acc auto const& acc,
-        concepts::IMdSpan auto out) const
+    ALPAKA_FN_ACC void operator()(onAcc::concepts::Acc auto const& acc, concepts::IMdSpan auto out) const
     {
         // The logical iteration space is compile-time known: 8 elements in one dimension.
         auto scope = onAcc::makeLockstep(acc, onAcc::worker::threadsInBlock, CVec<uint32_t, 8u>{});
@@ -33,8 +31,7 @@ struct LockstepDistributedVarKernel
 
         // Second lockstep pass: read the distributed array back and write the result to global memory.
         scope.concurrent(
-            []([[maybe_unused]] auto const& idx, auto outRef, auto tmpRef)
-            { outRef = tmpRef.load() * int32_t{2}; },
+            []([[maybe_unused]] auto const& idx, auto outRef, auto tmpRef) { outRef = tmpRef.load() * int32_t{2}; },
             out,
             tmp);
     }
@@ -80,16 +77,14 @@ struct LockstepExplicitWidthKernel
 
         // Deduced overload: the SIMD width is derived from the value type of the first data argument (here int32_t).
         scope.concurrent(
-            []([[maybe_unused]] auto const& idx, auto outRef, auto inRef)
-            { outRef = inRef.load() + int32_t{1}; },
+            []([[maybe_unused]] auto const& idx, auto outRef, auto inRef) { outRef = inRef.load() + int32_t{1}; },
             outDeduced,
             in);
 
         // Explicit overload: the value type given as template parameter selects the SIMD width.
         // Use this overload when the data has no value type (e.g. mapped data) or to steer the width deliberately.
         scope.template concurrent<int32_t>(
-            []([[maybe_unused]] auto const& idx, auto outRef, auto inRef)
-            { outRef = inRef.load() + int32_t{1}; },
+            []([[maybe_unused]] auto const& idx, auto outRef, auto inRef) { outRef = inRef.load() + int32_t{1}; },
             outExplicit,
             in);
     }
