@@ -15,7 +15,9 @@
 #include "alpaka/onAcc/lockstep/WorkerSpaceType.hpp"
 #include "alpaka/trait.hpp"
 
+#include <algorithm>
 #include <array>
+#include <bit>
 #include <cstdint>
 #include <type_traits>
 
@@ -203,6 +205,13 @@ namespace alpaka::onAcc
                 return internal::getLockstepSimdWidth<T_Acc, T_ValueType>(T_LogicalExtent{});
         }
 
+        /** Dispatch the functor over the logical iteration space.
+         *
+         * @attention The runtime tail branch below can make lanes within one warp take different code paths: some
+         * lanes process a full width-W pack while the remaining lanes fall back to width-1 iterations. Functors passed
+         * to concurrent() must therefore not rely on a uniform width across lanes and must not use collectives or
+         * warp/block wide synchronization inside concurrent(), unless they explicitly handle this divergence.
+         */
         template<uint32_t T_width, typename T_Fn, typename... T_Args>
         ALPAKA_FN_ACC constexpr void foreachImpl(T_Fn&& fn, T_Args&&... args) const
         {
