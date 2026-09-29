@@ -15,6 +15,17 @@
 
 namespace alpaka::onAcc::internal
 {
+    /** Return type of LockstepScope::var<T>(): distributed per-worker local storage.
+     *
+     * The storage is private to each worker and partitioned over the workers of the work group. Each worker owns
+     * divCeil(logicalElements, workerCount) slots; its elements are addressed through the slot offset supplied when a
+     * concurrent() functor is invoked. Users normally do not name this type directly but obtain a handle via
+     * LockstepScope::var() and pass it to LockstepScope::concurrent().
+     *
+     * @tparam T value type stored per element
+     * @tparam T_LogicalExtent compile-time known alpaka vector with the logical iteration space extents
+     * @tparam T_WorkerExtent compile-time known alpaka vector with the number of participating workers
+     */
     template<typename T, alpaka::concepts::CVector T_LogicalExtent, alpaka::concepts::CVector T_WorkerExtent>
     struct LockstepVar
     {
