@@ -24,10 +24,24 @@
 #include <iostream>
 #include <utility>
 
+//! Compile-time core tile size (square). Some device compilers (icpx 2026.1)
+//! miscompile SYCL kernels when example() is instantiated for several tiles in
+//! one translation unit, so the tile is fixed at compile time via a macro:
+//! configure with -DALPAKA_HEAT_TILE=16|32|64 (default 16).
+#ifndef ALPAKA_HEAT_TILE
+#    define ALPAKA_HEAT_TILE 16
+#endif
+static_assert(
+    ALPAKA_HEAT_TILE == 16 || ALPAKA_HEAT_TILE == 32 || ALPAKA_HEAT_TILE == 64,
+    "ALPAKA_HEAT_TILE must be 16, 32 or 64");
+
 namespace alpaka::example::heatEquation
 {
     using IdxType = uint32_t;
     using Data = double;
+
+    //! Compile-time square tile used as the block chunk for both stencil kernels.
+    using HeatTile = alpaka::CVec<IdxType, ALPAKA_HEAT_TILE, ALPAKA_HEAT_TILE>;
 
     void printExampleHeader(
         IdxType const sideLength,
@@ -297,8 +311,7 @@ namespace alpaka::example::heatEquation
         std::cerr << "  -c: disable checking for correct results" << std::endl;
         std::cerr << "  -l: use the lockstep stencil kernel (domain must be divisible by the compile-time tile)"
                   << std::endl;
-        std::cerr << "  -T tileSize: compile-time square tile size, one of {16, 32, 64}. Default: 16" << std::endl;
-        std::cerr << "  -b blockSize: runtime square block extent, > 0 and <= tileSize^2. Default: 16" << std::endl;
+        std::cerr << "  -b blockSize: runtime square block extent, > 0 and <= tile^2. Default: 16" << std::endl;
         std::cerr << "  -C: timing only, skip result validation and the final device-to-host copy" << std::endl;
         std::cerr << "  -S: disable the CpuSerial executor, only CpuOmpBlocks runs on the host" << std::endl;
         std::cerr << "  -h: Print this help message" << std::endl;
@@ -317,7 +330,7 @@ namespace alpaka::example::heatEquation
         bool enableCheck;
         bool useLockstep;
         bool skipCheck;
-        IdxType tileSize;
+
         Vec<IdxType, 2u> block;
 
         int operator()(alpaka::concepts::BackendSpec auto const& backend) const
@@ -332,47 +345,17 @@ namespace alpaka::example::heatEquation
             auto const deviceSpec = DeviceSpec{backend};
             auto const computeExec = getExecutor(backend);
 
-            switch(tileSize)
-            {
-            case 16u:
-                return example(
-                    deviceSpec,
-                    computeExec,
-                    sideLength,
-                    numTimeSteps,
-                    tMax,
-                    enableCheck,
-                    useLockstep,
-                    block,
-                    CVec<IdxType, 16u, 16u>{},
-                    skipCheck);
-            case 32u:
-                return example(
-                    deviceSpec,
-                    computeExec,
-                    sideLength,
-                    numTimeSteps,
-                    tMax,
-                    enableCheck,
-                    useLockstep,
-                    block,
-                    CVec<IdxType, 32u, 32u>{},
-                    skipCheck);
-            case 64u:
-                return example(
-                    deviceSpec,
-                    computeExec,
-                    sideLength,
-                    numTimeSteps,
-                    tMax,
-                    enableCheck,
-                    useLockstep,
-                    block,
-                    CVec<IdxType, 64u, 64u>{},
-                    skipCheck);
-            default:
-                return EXIT_FAILURE;
-            }
+            return example(
+                deviceSpec,
+                computeExec,
+                sideLength,
+                numTimeSteps,
+                tMax,
+                enableCheck,
+                useLockstep,
+                block,
+                HeatTile{},
+                skipCheck);
         }
     };
 
@@ -392,11 +375,10 @@ auto main(int argc, char* argv[]) -> int
     bool useLockstep = false;
     bool skipCheck = false;
     bool disableSerial = false;
-    IdxType tileSize = 16u;
     IdxType blockSize = 16u;
     double tMax = 0.1;
 
-    while((opt = getopt(argc, argv, "hn:t:d:T:b:clCS")) != -1)
+    while((opt = getopt(argc, argv, "hn:t:d:b:clCS")) != -1)
     {
         switch(opt)
         {
@@ -448,22 +430,6 @@ auto main(int argc, char* argv[]) -> int
                 return EXIT_FAILURE;
             }
             break;
-        case 'T':
-            try
-            {
-                tileSize = static_cast<IdxType>(std::stoull(optarg, nullptr, 0));
-            }
-            catch(std::invalid_argument const& e)
-            {
-                std::cerr << "Error: invalid argument '" << optarg << "'.\n";
-                return EXIT_FAILURE;
-            }
-            catch(std::out_of_range const& e)
-            {
-                std::cerr << "Error: value '" << optarg << "' out of range for unsigned long long.\n";
-                return EXIT_FAILURE;
-            }
-            break;
         case 'b':
             try
             {
@@ -501,25 +467,19 @@ auto main(int argc, char* argv[]) -> int
         }
     }
 
-    if(tileSize != 16u && tileSize != 32u && tileSize != 64u)
+    if(blockSize == 0u || static_cast<uint64_t>(blockSize) * blockSize > static_cast<uint64_t>(ALPAKA_HEAT_TILE) * ALPAKA_HEAT_TILE)
     {
-        std::cerr << "Error: invalid tile size '" << tileSize << "', must be one of {16, 32, 64}.\n";
+        std::cerr << "Error: invalid block extent '" << blockSize << "', must be > 0 and <= ALPAKA_HEAT_TILE^2 = "
+                  << ALPAKA_HEAT_TILE * ALPAKA_HEAT_TILE << ".\n";
         help(argv);
         return EXIT_FAILURE;
     }
 
-    if(blockSize == 0u || static_cast<uint64_t>(blockSize) * blockSize > static_cast<uint64_t>(tileSize) * tileSize)
+    if(useLockstep && sideLength % ALPAKA_HEAT_TILE != 0u)
     {
-        std::cerr << "Error: invalid block extent '" << blockSize << "', must be > 0 and <= tileSize^2 = "
-                  << tileSize * tileSize << ".\n";
-        help(argv);
-        return EXIT_FAILURE;
-    }
-
-    if(useLockstep && sideLength % tileSize != 0u)
-    {
-        std::cerr << "Error: the lockstep kernel requires the domain size to be divisible by the tile size (" << tileSize
-                  << " x " << tileSize << "), got " << sideLength << " x " << sideLength << ".\n";
+        std::cerr << "Error: the lockstep kernel requires the domain size to be divisible by the tile size ("
+                  << ALPAKA_HEAT_TILE << " x " << ALPAKA_HEAT_TILE << "), got " << sideLength << " x "
+                  << sideLength << ".\n";
         return EXIT_FAILURE;
     }
 
@@ -527,7 +487,7 @@ auto main(int argc, char* argv[]) -> int
 
     printExampleHeader(sideLength, numTimeSteps, enableCheck, tMax, useLockstep);
 
-    RunBackend const run{sideLength, numTimeSteps, tMax, enableCheck, useLockstep, skipCheck, tileSize, block};
+    RunBackend const run{sideLength, numTimeSteps, tMax, enableCheck, useLockstep, skipCheck, block};
 
     // Locally filtered executor list for `-S`: drop CpuSerial without touching any alpaka global state.
     constexpr auto executorsWithoutSerial = alpaka::meta::filter(
