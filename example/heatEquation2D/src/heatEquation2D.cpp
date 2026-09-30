@@ -305,6 +305,77 @@ namespace alpaka::example::heatEquation
         std::cerr << std::endl;
     }
 
+    //! Backend dispatcher used by onHost::executeForEach().
+    //!
+    //! A named functor is used instead of a generic lambda: some device compilers do not emit the SYCL/device host
+    //! stubs for kernels instantiated from a generic lambda used as the executeForEach body.
+    struct RunBackend
+    {
+        IdxType sideLength;
+        IdxType numTimeSteps;
+        double tMax;
+        bool enableCheck;
+        bool useLockstep;
+        bool skipCheck;
+        IdxType tileSize;
+        Vec<IdxType, 2u> block;
+
+        int operator()(alpaka::concepts::BackendSpec auto const& backend) const
+        {
+            using namespace alpaka;
+            using namespace alpaka::onHost;
+
+            auto selector = makeDeviceSelector(DeviceSpec{backend});
+            if(!selector.isAvailable())
+                return EXIT_SUCCESS;
+
+            auto const deviceSpec = DeviceSpec{backend};
+            auto const computeExec = getExecutor(backend);
+
+            switch(tileSize)
+            {
+            case 16u:
+                return example(
+                    deviceSpec,
+                    computeExec,
+                    sideLength,
+                    numTimeSteps,
+                    tMax,
+                    enableCheck,
+                    useLockstep,
+                    block,
+                    CVec<IdxType, 16u, 16u>{},
+                    skipCheck);
+            case 32u:
+                return example(
+                    deviceSpec,
+                    computeExec,
+                    sideLength,
+                    numTimeSteps,
+                    tMax,
+                    enableCheck,
+                    useLockstep,
+                    block,
+                    CVec<IdxType, 32u, 32u>{},
+                    skipCheck);
+            case 64u:
+                return example(
+                    deviceSpec,
+                    computeExec,
+                    sideLength,
+                    numTimeSteps,
+                    tMax,
+                    enableCheck,
+                    useLockstep,
+                    block,
+                    CVec<IdxType, 64u, 64u>{},
+                    skipCheck);
+            default:
+                return EXIT_FAILURE;
+            }
+        }
+    };
+
 } // namespace alpaka::example::heatEquation
 
 auto main(int argc, char* argv[]) -> int
@@ -456,57 +527,7 @@ auto main(int argc, char* argv[]) -> int
 
     printExampleHeader(sideLength, numTimeSteps, enableCheck, tMax, useLockstep);
 
-    auto const run = [=](alpaka::concepts::BackendSpec auto const& backend) -> int
-    {
-        auto selector = onHost::makeDeviceSelector(alpaka::onHost::DeviceSpec{backend});
-        if(!selector.isAvailable())
-            return EXIT_SUCCESS;
-
-        auto const deviceSpec = alpaka::onHost::DeviceSpec{backend};
-        auto const computeExec = alpaka::getExecutor(backend);
-
-        switch(tileSize)
-        {
-        case 16u:
-            return alpaka::example::heatEquation::example(
-                deviceSpec,
-                computeExec,
-                sideLength,
-                numTimeSteps,
-                tMax,
-                enableCheck,
-                useLockstep,
-                block,
-                CVec<IdxType, 16u, 16u>{},
-                skipCheck);
-        case 32u:
-            return alpaka::example::heatEquation::example(
-                deviceSpec,
-                computeExec,
-                sideLength,
-                numTimeSteps,
-                tMax,
-                enableCheck,
-                useLockstep,
-                block,
-                CVec<IdxType, 32u, 32u>{},
-                skipCheck);
-        case 64u:
-            return alpaka::example::heatEquation::example(
-                deviceSpec,
-                computeExec,
-                sideLength,
-                numTimeSteps,
-                tMax,
-                enableCheck,
-                useLockstep,
-                block,
-                CVec<IdxType, 64u, 64u>{},
-                skipCheck);
-        default:
-            return EXIT_FAILURE;
-        }
-    };
+    RunBackend const run{sideLength, numTimeSteps, tMax, enableCheck, useLockstep, skipCheck, tileSize, block};
 
     // Locally filtered executor list for `-S`: drop CpuSerial without touching any alpaka global state.
     constexpr auto executorsWithoutSerial = alpaka::meta::filter(
