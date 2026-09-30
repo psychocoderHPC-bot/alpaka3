@@ -5,6 +5,7 @@
 
 #include "BoundaryKernel.hpp"
 #include "StencilKernel.hpp"
+#include "StencilKernelLockstep.hpp"
 #include "alpaka/onHost/FrameSpec.hpp"
 #include "analyticalSolution.hpp"
 
@@ -27,14 +28,23 @@ namespace alpaka::example::heatEquation
     using IdxType = uint32_t;
     using Data = double;
 
+    //! Compile-time core tile of the lockstep stencil and the (runtime) block extent used to launch it.
+    //! The lockstep scope iterates the whole tile while the physical block only provides the block extent workers.
+    constexpr IdxType lockstepTileY = 64u;
+    constexpr IdxType lockstepTileX = 64u;
+    constexpr IdxType lockstepBlockY = 16u;
+    constexpr IdxType lockstepBlockX = 16u;
+
     void printExampleHeader(
         IdxType const sideLength,
         IdxType const numTimeSteps,
         bool const autoCheck,
-        double const tMax)
+        double const tMax,
+        bool const lockstep)
     {
         std::cout << "================================" << std::endl;
         std::cout << "Example Heat Equation Stencil" << std::endl;
+        std::cout << "    Stencil kernel: " << (lockstep ? "lockstep" : "original") << std::endl;
         std::cout << "    Number of elements [#]: " << sideLength << " x " << sideLength << " = "
                   << sideLength * sideLength << std::endl;
         std::cout << "    Time steps [#]: " << numTimeSteps << std::endl;
@@ -62,7 +72,8 @@ namespace alpaka::example::heatEquation
         uint32_t const sideLength,
         uint32_t const numTimeSteps,
         double const tMax,
-        bool const enableCheck)
+        bool const enableCheck,
+        bool const useLockstep)
     {
         using namespace alpaka;
         using namespace alpaka::onHost;
@@ -158,24 +169,70 @@ namespace alpaka::example::heatEquation
         auto const dataBlockingBorder
             = FrameSpec{Vec{longestSide / chunkSize.x()}, Vec{std::max(chunkSize.y(), chunkSize.x())}, computeExec};
 
+        // Lockstep stencil configuration: one compile-time core tile per block, launched with a smaller block
+        // extent. The lockstep logical iteration space is the full tile; every block loads the shared memory tile
+        // (tile + halo per dimension) exactly like the original kernel. Only dimension tile-divisible sizes are
+        // supported.
+        constexpr auto lockstepTile = CVec<IdxType, lockstepTileY, lockstepTileX>{};
+        constexpr auto lockstepBlockExtent = CVec<IdxType, lockstepBlockY, lockstepBlockX>{};
+        auto const lockstepSharedMemExtents = CVec<uint32_t, lockstepTileY + halo, lockstepTileX + halo>{};
+
+        if(useLockstep)
+        {
+            if(numNodes[0] % lockstepTile[0] != 0 || numNodes[1] % lockstepTile[1] != 0)
+            {
+                std::cerr << "Error: the lockstep kernel requires the domain size to be divisible by the tile size ("
+                          << lockstepTile[0] << " x " << lockstepTile[1] << "), got " << numNodes[0] << " x "
+                          << numNodes[1] << ".\n";
+                return EXIT_FAILURE;
+            }
+        }
+
+        IdxTypeVec const lockstepNumChunks{
+            divCeil(numNodes[0], lockstepTile[0]),
+            divCeil(numNodes[1], lockstepTile[1]),
+        };
+
+        auto const dataBlockingStencilLockstep = FrameSpec{lockstepNumChunks, lockstepBlockExtent, computeExec};
+
+        StencilKernelLockstep stencilKernelLockstep;
+
         auto const startTime = std::chrono::high_resolution_clock::now();
 
         // Simulate
         for(uint32_t step = 1; step <= numTimeSteps; ++step)
         {
             // Compute next values
-            computeQueue.enqueue(
-                dataBlockingStencil,
-                KernelBundle{
-                    stencilKernel,
-                    uCurrBufAcc,
-                    uNextBufAcc,
-                    chunkSize,
-                    sharedMemExtents,
-                    numNodes,
-                    dx,
-                    dy,
-                    dt});
+            if(useLockstep)
+            {
+                computeQueue.enqueue(
+                    dataBlockingStencilLockstep,
+                    KernelBundle{
+                        stencilKernelLockstep,
+                        uCurrBufAcc,
+                        uNextBufAcc,
+                        numNodes,
+                        lockstepTile,
+                        lockstepSharedMemExtents,
+                        dx,
+                        dy,
+                        dt});
+            }
+            else
+            {
+                computeQueue.enqueue(
+                    dataBlockingStencil,
+                    KernelBundle{
+                        stencilKernel,
+                        uCurrBufAcc,
+                        uNextBufAcc,
+                        chunkSize,
+                        sharedMemExtents,
+                        numNodes,
+                        dx,
+                        dy,
+                        dt});
+            }
 
             computeQueue.enqueue(
                 dataBlockingBorder,
@@ -215,7 +272,7 @@ namespace alpaka::example::heatEquation
 
         if(resultIsCorrect)
         {
-            std::cout << "Execution results correct!" << std::endl;
+            std::cout << "Execution results correct! (Max error = " << maxError << ")" << std::endl;
             return EXIT_SUCCESS;
         }
         else
@@ -236,6 +293,8 @@ namespace alpaka::example::heatEquation
                      "stability condition. Default: 0.1"
                   << std::endl;
         std::cerr << "  -c: disable checking for correct results" << std::endl;
+        std::cerr << "  -l: use the lockstep stencil kernel (domain must be divisible by the compile-time tile)"
+                  << std::endl;
         std::cerr << "  -h: Print this help message" << std::endl;
         std::cerr << std::endl;
     }
@@ -253,9 +312,10 @@ auto main(int argc, char* argv[]) -> int
 
     int opt;
     bool enableCheck = true;
+    bool useLockstep = false;
     double tMax = 0.1;
 
-    while((opt = getopt(argc, argv, "hn:t:d:c")) != -1)
+    while((opt = getopt(argc, argv, "hn:t:d:cl")) != -1)
     {
         switch(opt)
         {
@@ -313,13 +373,16 @@ auto main(int argc, char* argv[]) -> int
         case 'c':
             enableCheck = false;
             break;
+        case 'l':
+            useLockstep = true;
+            break;
         default:
             help(argv);
             exit(EXIT_FAILURE);
         }
     }
 
-    printExampleHeader(sideLength, numTimeSteps, enableCheck, tMax);
+    printExampleHeader(sideLength, numTimeSteps, enableCheck, tMax, useLockstep);
 
     /* Execute the example once for each backend (device specification + executor)
      *
@@ -354,7 +417,8 @@ auto main(int argc, char* argv[]) -> int
                 sideLength,
                 numTimeSteps,
                 tMax,
-                enableCheck);
+                enableCheck,
+                useLockstep);
         },
         onHost::allBackends(onHost::enabledDeviceSpecs, exec::enabledExecutors));
 }
