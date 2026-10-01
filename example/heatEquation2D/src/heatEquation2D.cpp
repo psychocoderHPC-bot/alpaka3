@@ -467,10 +467,11 @@ auto main(int argc, char* argv[]) -> int
         }
     }
 
-    if(blockSize == 0u || static_cast<uint64_t>(blockSize) * blockSize > static_cast<uint64_t>(ALPAKA_HEAT_TILE) * ALPAKA_HEAT_TILE)
+    if(blockSize == 0u
+       || static_cast<uint64_t>(blockSize) * blockSize > static_cast<uint64_t>(ALPAKA_HEAT_TILE) * ALPAKA_HEAT_TILE)
     {
-        std::cerr << "Error: invalid block extent '" << blockSize << "', must be > 0 and <= ALPAKA_HEAT_TILE^2 = "
-                  << ALPAKA_HEAT_TILE * ALPAKA_HEAT_TILE << ".\n";
+        std::cerr << "Error: invalid block extent '" << blockSize
+                  << "', must be > 0 and <= ALPAKA_HEAT_TILE^2 = " << ALPAKA_HEAT_TILE * ALPAKA_HEAT_TILE << ".\n";
         help(argv);
         return EXIT_FAILURE;
     }
@@ -478,8 +479,8 @@ auto main(int argc, char* argv[]) -> int
     if(useLockstep && sideLength % ALPAKA_HEAT_TILE != 0u)
     {
         std::cerr << "Error: the lockstep kernel requires the domain size to be divisible by the tile size ("
-                  << ALPAKA_HEAT_TILE << " x " << ALPAKA_HEAT_TILE << "), got " << sideLength << " x "
-                  << sideLength << ".\n";
+                  << ALPAKA_HEAT_TILE << " x " << ALPAKA_HEAT_TILE << "), got " << sideLength << " x " << sideLength
+                  << ".\n";
         return EXIT_FAILURE;
     }
 
@@ -497,9 +498,7 @@ auto main(int argc, char* argv[]) -> int
 
     if(disableSerial)
     {
-        return onHost::executeForEach(
-            run,
-            onHost::allBackends(onHost::enabledDeviceSpecs, executorsWithoutSerial));
+        return onHost::executeForEach(run, onHost::allBackends(onHost::enabledDeviceSpecs, executorsWithoutSerial));
     }
 
     /* Execute the example once for each backend (device specification + executor)
