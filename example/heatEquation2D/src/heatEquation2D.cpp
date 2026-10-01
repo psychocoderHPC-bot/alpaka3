@@ -5,6 +5,7 @@
 
 #include "BoundaryKernel.hpp"
 #include "StencilKernel.hpp"
+#include "StencilKernelLockstep.hpp"
 #include "alpaka/onHost/FrameSpec.hpp"
 #include "analyticalSolution.hpp"
 
@@ -18,23 +19,40 @@
 #include <cassert>
 #include <chrono>
 #include <cmath>
+#include <concepts>
 #include <cstdint>
 #include <iostream>
 #include <utility>
+
+//! Compile-time core tile size (square). Some device compilers (icpx 2026.1)
+//! miscompile SYCL kernels when example() is instantiated for several tiles in
+//! one translation unit, so the tile is fixed at compile time via a macro:
+//! configure with -DALPAKA_HEAT_TILE=16|32|64 (default 16).
+#ifndef ALPAKA_HEAT_TILE
+#    define ALPAKA_HEAT_TILE 16
+#endif
+static_assert(
+    ALPAKA_HEAT_TILE == 16 || ALPAKA_HEAT_TILE == 32 || ALPAKA_HEAT_TILE == 64,
+    "ALPAKA_HEAT_TILE must be 16, 32 or 64");
 
 namespace alpaka::example::heatEquation
 {
     using IdxType = uint32_t;
     using Data = double;
 
+    //! Compile-time square tile used as the block chunk for both stencil kernels.
+    using HeatTile = alpaka::CVec<IdxType, ALPAKA_HEAT_TILE, ALPAKA_HEAT_TILE>;
+
     void printExampleHeader(
         IdxType const sideLength,
         IdxType const numTimeSteps,
         bool const autoCheck,
-        double const tMax)
+        double const tMax,
+        bool const lockstep)
     {
         std::cout << "================================" << std::endl;
         std::cout << "Example Heat Equation Stencil" << std::endl;
+        std::cout << "    Stencil kernel: " << (lockstep ? "lockstep" : "original") << std::endl;
         std::cout << "    Number of elements [#]: " << sideLength << " x " << sideLength << " = "
                   << sideLength * sideLength << std::endl;
         std::cout << "    Time steps [#]: " << numTimeSteps << std::endl;
@@ -56,19 +74,34 @@ namespace alpaka::example::heatEquation
     //! Instead, a single accelerator is selected once from the active accelerators and the kernels are executed with
     //! the selected accelerator only. If you use the example as the starting point for your project, you can rename
     //! the example() function to main() and move the accelerator tag to the function body.
+    //!
+    //! The stencil core tile is a compile-time `CVector`; the physical block extent is a runtime square `Vec` passed
+    //! via the `FrameSpec` (and to the lockstep kernel scope). This isolates the lockstep effect from tile-size
+    //! effects: both the original and the lockstep kernel use the same tile and block extent.
+    template<alpaka::concepts::CVector T_Tile>
     int example(
         auto const deviceSpec,
         auto const computeExec,
         uint32_t const sideLength,
         uint32_t const numTimeSteps,
         double const tMax,
-        bool const enableCheck)
+        bool const enableCheck,
+        bool const useLockstep,
+        Vec<IdxType, 2u> const& block,
+        T_Tile const& tile,
+        bool const skipCheck)
     {
         using namespace alpaka;
         using namespace alpaka::onHost;
 
         constexpr uint32_t Dimensions = 2u;
         using IdxTypeVec = Vec<IdxType, Dimensions>;
+
+        // Compile-time tile extents and derived shared memory extents (tile + halo per dimension).
+        static constexpr IdxType tileY = T_Tile{}[0];
+        static constexpr IdxType tileX = T_Tile{}[1];
+        constexpr uint32_t halo = 2u;
+        constexpr auto sharedMemExtents = CVec<uint32_t, tileY + halo, tileX + halo>{};
 
         std::cout << deviceSpec.getApi().getName() << std::endl;
 
@@ -131,32 +164,48 @@ namespace alpaka::example::heatEquation
         memcpy(computeQueue, uCurrBufAcc, uBufHost);
         wait(computeQueue);
 
-        // Appropriate chunk size to split your problem for your Acc
-        constexpr IdxType xSize = 16u;
-        constexpr IdxType ySize = 16u;
-        constexpr IdxType halo = 2u;
-        constexpr auto chunkSize = CVec<IdxType, ySize, xSize>{};
-        auto const numNodesWithHalo = numNodes + halo;
+        // The compile-time tile is the chunk handled by one block for both kernels. The runtime block extent only
+        // controls how many workers the block actually exposes.
+        IdxTypeVec const numNodesWithHalo = numNodes + haloSize;
 
         IdxTypeVec const numChunks{
-            divCeil(numNodes[0], chunkSize[0]),
-            divCeil(numNodes[1], chunkSize[1]),
+            divCeil(numNodes[0], tileY),
+            divCeil(numNodes[1], tileX),
         };
 
         assert(
-            numNodes[0] % chunkSize[0] == 0 && numNodes[1] % chunkSize[1] == 0
-            && "Domain must be divisible by chunk size");
-
-        auto sharedMemExtents = CVec<uint32_t, ySize + halo, xSize + halo>{};
+            numNodes[0] % tileY == 0 && numNodes[1] % tileX == 0
+            && "Domain must be divisible by the compile-time tile size");
 
         StencilKernel stencilKernel;
         BoundaryKernel boundaryKernel;
 
-        auto const dataBlockingStencil = FrameSpec{numChunks, chunkSize, computeExec};
+        auto const dataBlockingStencil = FrameSpec{numChunks, block, computeExec};
 
+        // Boundary kernel geometry: launched with the same runtime block extent, covering the whole side. It stays
+        // correct for any tile because the kernel derives its work from the linear grid.
         auto const longestSide = std::max(numNodesWithHalo.y(), numNodesWithHalo.x());
+        auto const borderExtent = std::max(block.y(), block.x());
         auto const dataBlockingBorder
-            = FrameSpec{Vec{longestSide / chunkSize.x()}, Vec{std::max(chunkSize.y(), chunkSize.x())}, computeExec};
+            = FrameSpec{Vec{divCeil(longestSide, borderExtent)}, Vec{borderExtent}, computeExec};
+
+        // Lockstep stencil configuration: one compile-time core tile per block, launched with the runtime block
+        // extent. The lockstep logical iteration space is the full tile; every block loads the shared memory tile
+        // (tile + halo per dimension) exactly like the original kernel. Only dimension tile-divisible sizes are
+        // supported.
+        if(useLockstep)
+        {
+            if(numNodes[0] % tileY != 0 || numNodes[1] % tileX != 0)
+            {
+                std::cerr << "Error: the lockstep kernel requires the domain size to be divisible by the tile size ("
+                          << tileY << " x " << tileX << "), got " << numNodes[0] << " x " << numNodes[1] << ".\n";
+                return EXIT_FAILURE;
+            }
+        }
+
+        auto const dataBlockingStencilLockstep = FrameSpec{numChunks, block, computeExec};
+
+        StencilKernelLockstep stencilKernelLockstep;
 
         auto const startTime = std::chrono::high_resolution_clock::now();
 
@@ -164,18 +213,36 @@ namespace alpaka::example::heatEquation
         for(uint32_t step = 1; step <= numTimeSteps; ++step)
         {
             // Compute next values
-            computeQueue.enqueue(
-                dataBlockingStencil,
-                KernelBundle{
-                    stencilKernel,
-                    uCurrBufAcc,
-                    uNextBufAcc,
-                    chunkSize,
-                    sharedMemExtents,
-                    numNodes,
-                    dx,
-                    dy,
-                    dt});
+            if(useLockstep)
+            {
+                computeQueue.enqueue(
+                    dataBlockingStencilLockstep,
+                    KernelBundle{
+                        stencilKernelLockstep,
+                        uCurrBufAcc,
+                        uNextBufAcc,
+                        numNodes,
+                        tile,
+                        sharedMemExtents,
+                        dx,
+                        dy,
+                        dt});
+            }
+            else
+            {
+                computeQueue.enqueue(
+                    dataBlockingStencil,
+                    KernelBundle{
+                        stencilKernel,
+                        uCurrBufAcc,
+                        uNextBufAcc,
+                        tile,
+                        sharedMemExtents,
+                        numNodes,
+                        dx,
+                        dy,
+                        dt});
+            }
 
             computeQueue.enqueue(
                 dataBlockingBorder,
@@ -202,6 +269,12 @@ namespace alpaka::example::heatEquation
         std::cout << "Simulation took " << elapsedTime.count() << " seconds." << std::endl;
         std::cout << "Time per time step: " << elapsedTime.count() / numTimeSteps * 1000 << " ms." << std::endl;
 
+        // Timing-only mode: skip the final device -> host copy and validation entirely.
+        if(skipCheck)
+        {
+            std::cout << "Timing only (validation disabled)" << std::endl;
+            return EXIT_SUCCESS;
+        }
 
         // Copy device -> host
         memcpy(dumpQueue, uBufHost, uCurrBufAcc);
@@ -215,7 +288,7 @@ namespace alpaka::example::heatEquation
 
         if(resultIsCorrect)
         {
-            std::cout << "Execution results correct!" << std::endl;
+            std::cout << "Execution results correct! (Max error = " << maxError << ")" << std::endl;
             return EXIT_SUCCESS;
         }
         else
@@ -236,9 +309,55 @@ namespace alpaka::example::heatEquation
                      "stability condition. Default: 0.1"
                   << std::endl;
         std::cerr << "  -c: disable checking for correct results" << std::endl;
+        std::cerr << "  -l: use the lockstep stencil kernel (domain must be divisible by the compile-time tile)"
+                  << std::endl;
+        std::cerr << "  -b blockSize: runtime square block extent, > 0 and <= tile^2. Default: 16" << std::endl;
+        std::cerr << "  -C: timing only, skip result validation and the final device-to-host copy" << std::endl;
+        std::cerr << "  -S: disable the CpuSerial executor, only CpuOmpBlocks runs on the host" << std::endl;
         std::cerr << "  -h: Print this help message" << std::endl;
         std::cerr << std::endl;
     }
+
+    //! Backend dispatcher used by onHost::executeForEach().
+    //!
+    //! A named functor is used instead of a generic lambda: some device compilers do not emit the SYCL/device host
+    //! stubs for kernels instantiated from a generic lambda used as the executeForEach body.
+    struct RunBackend
+    {
+        IdxType sideLength;
+        IdxType numTimeSteps;
+        double tMax;
+        bool enableCheck;
+        bool useLockstep;
+        bool skipCheck;
+
+        Vec<IdxType, 2u> block;
+
+        int operator()(alpaka::concepts::BackendSpec auto const& backend) const
+        {
+            using namespace alpaka;
+            using namespace alpaka::onHost;
+
+            auto selector = makeDeviceSelector(DeviceSpec{backend});
+            if(!selector.isAvailable())
+                return EXIT_SUCCESS;
+
+            auto const deviceSpec = DeviceSpec{backend};
+            auto const computeExec = getExecutor(backend);
+
+            return example(
+                deviceSpec,
+                computeExec,
+                sideLength,
+                numTimeSteps,
+                tMax,
+                enableCheck,
+                useLockstep,
+                block,
+                HeatTile{},
+                skipCheck);
+        }
+    };
 
 } // namespace alpaka::example::heatEquation
 
@@ -253,9 +372,13 @@ auto main(int argc, char* argv[]) -> int
 
     int opt;
     bool enableCheck = true;
+    bool useLockstep = false;
+    bool skipCheck = false;
+    bool disableSerial = false;
+    IdxType blockSize = 16u;
     double tMax = 0.1;
 
-    while((opt = getopt(argc, argv, "hn:t:d:c")) != -1)
+    while((opt = getopt(argc, argv, "hn:t:d:b:clCS")) != -1)
     {
         switch(opt)
         {
@@ -307,11 +430,36 @@ auto main(int argc, char* argv[]) -> int
                 return EXIT_FAILURE;
             }
             break;
+        case 'b':
+            try
+            {
+                blockSize = static_cast<IdxType>(std::stoull(optarg, nullptr, 0));
+            }
+            catch(std::invalid_argument const& e)
+            {
+                std::cerr << "Error: invalid argument '" << optarg << "'.\n";
+                return EXIT_FAILURE;
+            }
+            catch(std::out_of_range const& e)
+            {
+                std::cerr << "Error: value '" << optarg << "' out of range for unsigned long long.\n";
+                return EXIT_FAILURE;
+            }
+            break;
         case 'h':
             help(argv);
             exit(EXIT_SUCCESS);
         case 'c':
             enableCheck = false;
+            break;
+        case 'l':
+            useLockstep = true;
+            break;
+        case 'C':
+            skipCheck = true;
+            break;
+        case 'S':
+            disableSerial = true;
             break;
         default:
             help(argv);
@@ -319,7 +467,39 @@ auto main(int argc, char* argv[]) -> int
         }
     }
 
-    printExampleHeader(sideLength, numTimeSteps, enableCheck, tMax);
+    if(blockSize == 0u
+       || static_cast<uint64_t>(blockSize) * blockSize > static_cast<uint64_t>(ALPAKA_HEAT_TILE) * ALPAKA_HEAT_TILE)
+    {
+        std::cerr << "Error: invalid block extent '" << blockSize
+                  << "', must be > 0 and <= ALPAKA_HEAT_TILE^2 = " << ALPAKA_HEAT_TILE * ALPAKA_HEAT_TILE << ".\n";
+        help(argv);
+        return EXIT_FAILURE;
+    }
+
+    if(useLockstep && sideLength % ALPAKA_HEAT_TILE != 0u)
+    {
+        std::cerr << "Error: the lockstep kernel requires the domain size to be divisible by the tile size ("
+                  << ALPAKA_HEAT_TILE << " x " << ALPAKA_HEAT_TILE << "), got " << sideLength << " x " << sideLength
+                  << ".\n";
+        return EXIT_FAILURE;
+    }
+
+    Vec<IdxType, 2u> const block{blockSize, blockSize};
+
+    printExampleHeader(sideLength, numTimeSteps, enableCheck, tMax, useLockstep);
+
+    RunBackend const run{sideLength, numTimeSteps, tMax, enableCheck, useLockstep, skipCheck, block};
+
+    // Locally filtered executor list for `-S`: drop CpuSerial without touching any alpaka global state.
+    constexpr auto executorsWithoutSerial = alpaka::meta::filter(
+        [](auto executor) constexpr
+        { return !std::same_as<std::decay_t<decltype(executor)>, alpaka::exec::CpuSerial>; },
+        alpaka::exec::enabledExecutors);
+
+    if(disableSerial)
+    {
+        return onHost::executeForEach(run, onHost::allBackends(onHost::enabledDeviceSpecs, executorsWithoutSerial));
+    }
 
     /* Execute the example once for each backend (device specification + executor)
      *
@@ -342,19 +522,5 @@ auto main(int argc, char* argv[]) -> int
      * A list of executors can be found
      * https://alpaka3.readthedocs.io/en/latest/basic/cheatsheet.html#executors
      */
-    return onHost::executeForEach(
-        [=](alpaka::concepts::BackendSpec auto const& backend)
-        {
-            auto selector = onHost::makeDeviceSelector(alpaka::onHost::DeviceSpec{backend});
-            if(!selector.isAvailable())
-                return EXIT_SUCCESS;
-            return alpaka::example::heatEquation::example(
-                alpaka::onHost::DeviceSpec{backend},
-                alpaka::getExecutor(backend),
-                sideLength,
-                numTimeSteps,
-                tMax,
-                enableCheck);
-        },
-        onHost::allBackends(onHost::enabledDeviceSpecs, exec::enabledExecutors));
+    return onHost::executeForEach(run, onHost::allBackends(onHost::enabledDeviceSpecs, exec::enabledExecutors));
 }

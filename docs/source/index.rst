@@ -78,6 +78,7 @@ Individual chapters are based on the information of the chapters before.
    tutorial/random.rst
    tutorial/intrinsics.rst
    tutorial/warp.rst
+   tutorial/lockstep.rst
    tutorial/kernelFn.rst
    tutorial/vendorInterop.rst
    tutorial/algorithms.rst
