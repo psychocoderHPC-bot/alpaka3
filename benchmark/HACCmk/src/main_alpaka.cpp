@@ -7,43 +7,29 @@
 
 #include <alpaka/alpaka.hpp>
 
+#include <algorithm>
 #include <bit>
 #include <chrono>
+#include <cstdint>
 #include <iostream>
 
 namespace haccmkAlpaka
 {
-    template<typename T>
-    struct DeltaMove
+    /** Cooperatively parallel variant of the HACCmk Step10 kernel.
+     *
+     * One thread block is responsible for one active particle at a time (the `blocksInGrid` map lets a block
+     * process several particles in a grid-stride loop). The inner `n2` reduction is split across all threads of
+     * the block; each thread accumulates its private partial sums, the partials are staged into shared memory and
+     * combined with a converging tree reduction. Thread 0 finally scales the block sum by `fcoeff`.
+     *
+     * The kernel is written with backend independent `onAcc` facilities only, so it compiles unchanged for the
+     * CPU, CUDA, HIP and SYCL backends.
+     */
+    struct Step10KernelCoop
     {
-        T x;
-        T y;
-        T z;
+        /** Logical number of threads per frame. `FrameSpec` frame extent and shared memory sizing both use it. */
+        static constexpr uint32_t blockSize = 128u;
 
-        constexpr DeltaMove operator+(DeltaMove const& other)
-        {
-            return DeltaMove{x + other.x, y + other.y, z + other.z};
-        }
-    };
-
-    constexpr void alpakaSimdizedInvoke(auto&& f, alpaka::concepts::SpecializationOf<DeltaMove> auto&&... args)
-    {
-        alpakaSimdizedInvoke(ALPAKA_FORWARD(f), ALPAKA_FORWARD(args).x...);
-        alpakaSimdizedInvoke(ALPAKA_FORWARD(f), ALPAKA_FORWARD(args).y...);
-        alpakaSimdizedInvoke(ALPAKA_FORWARD(f), ALPAKA_FORWARD(args).z...);
-    }
-
-    template<uint32_t T_width, typename T>
-    constexpr auto makeSimdized(DeltaMove<T> const& value)
-    {
-        using SimdMemberType = ALPAKA_TYPEOF(alpaka::makeSimdized<T_width>(std::declval<T>()));
-        DeltaMove<SimdMemberType> result;
-        alpakaSimdizedInvoke([](alpaka::concepts::Simd auto& lhs, auto const& rhs) { lhs = rhs; }, result, value);
-        return result;
-    }
-
-    struct Step10Kernel
-    {
         ALPAKA_FN_ACC auto operator()(
             auto const& acc,
             int n1,
@@ -64,63 +50,104 @@ namespace haccmkAlpaka
             constexpr float const ma0 = 0.269327, ma1 = -0.0750978, ma2 = 0.0114808, ma3 = -0.00109313,
                                   ma4 = 0.0000605491, ma5 = -0.00000147177;
 
-            for(auto i :
-                alpaka::onAcc::makeIdxMap(acc, alpaka::onAcc::worker::linearThreadsInGrid, alpaka::IdxRange{n1}))
-            {
-                auto move = DeltaMove<float>{0, 0, 0};
+            // Shared staging buffers for the per-thread partial sums, one per component.
+            auto sx = onAcc::declareSharedMdArray<float, uniqueId()>(acc, CVec<uint32_t, blockSize>{});
+            auto sy = onAcc::declareSharedMdArray<float, uniqueId()>(acc, CVec<uint32_t, blockSize>{});
+            auto sz = onAcc::declareSharedMdArray<float, uniqueId()>(acc, CVec<uint32_t, blockSize>{});
 
+            // Runtime block geometry. The physical thread count is not guaranteed to equal `blockSize`; on host
+            // backends the frame may be executed with fewer threads and for a frame extent below the warp size the
+            // backend may use more. All reduction code below therefore depends on the runtime values only.
+            uint32_t const threads = static_cast<uint32_t>(acc[layer::thread].count().product());
+            uint32_t const tid
+                = static_cast<uint32_t>(linearize(acc[layer::thread].count(), acc[layer::thread].idx()));
+            // Smallest power of two that covers all participating threads, bounded by the shared array size.
+            // (A ternary avoids binding a reference to the static constexpr member, which nvcc cannot
+            //  materialize in device code.)
+            uint32_t const nextPow2Candidate = std::bit_ceil(threads > 0u ? threads : 1u);
+            uint32_t const nextPow2 = nextPow2Candidate < blockSize ? nextPow2Candidate : blockSize;
+
+            // Outer loop over active particles: each block handles a grid-stride subset of [0, n1).
+            for(auto i : onAcc::makeIdxMap(acc, onAcc::worker::blocksInGrid, IdxRange{n1}))
+            {
                 float xxi = xx[i];
                 float yyi = yy[i];
                 float zzi = zz[i];
 
-                auto simdGrid = onAcc::SimdAlgo{onAcc::worker::allThreads};
-                move = simdGrid.transformReduce(
-                    acc,
-                    Vec{n2},
-                    move,
-                    std::plus{},
-                    [&](auto const&,
-                        concepts::Simd auto const& simd_xx1,
-                        concepts::Simd auto const& simd_yy1,
-                        concepts::Simd auto const& simd_zz1,
-                        concepts::Simd auto const& simd_mass1) constexpr
-                    {
-                        concepts::Simd auto dxc = simd_xx1 - xxi;
-                        concepts::Simd auto dyc = simd_yy1 - yyi;
-                        concepts::Simd auto dzc = simd_zz1 - zzi;
+                // Per-thread partial sums of the inner n2 reduction.
+                float px = 0.f;
+                float py = 0.f;
+                float pz = 0.f;
 
-                        concepts::Simd auto r2 = dxc * dxc + dyc * dyc + dzc * dzc;
+                for(auto j : onAcc::makeIdxMap(acc, onAcc::worker::threadsInBlock, IdxRange{n2}))
+                {
+                    float dxc = xx[j] - xxi;
+                    float dyc = yy[j] - yyi;
+                    float dzc = zz[j] - zzi;
 
-                        using SimdType = ALPAKA_TYPEOF(simd_mass1);
-                        concepts::Simd auto m = SimdType::fill(0.f);
+                    float r2 = dxc * dxc + dyc * dyc + dzc * dzc;
 
-                        where(r2 < fsrrmax2, m) = simd_mass1;
+                    float m = (r2 < fsrrmax2) ? mass[j] : 0.f;
 
-                        alpaka::concepts::Simd auto tmp = r2 + mp_rsm2;
-                        concepts::Simd auto bar = alpaka::math::sqrt(tmp);
+                    float f = r2 + mp_rsm2;
+                    f = m
+                        * (1.f / (f * alpaka::math::sqrt(f))
+                           - (ma0 + r2 * (ma1 + r2 * (ma2 + r2 * (ma3 + r2 * (ma4 + r2 * ma5))))));
 
-                        concepts::Simd auto p = float{1.0} / (tmp * bar);
+                    px += f * dxc;
+                    py += f * dyc;
+                    pz += f * dzc;
+                }
 
-                        concepts::Simd auto f
-                            = p - (ma0 + r2 * (ma1 + r2 * (ma2 + r2 * (ma3 + r2 * (ma4 + r2 * ma5)))));
-                        concepts::Simd auto fac = SimdType::fill(0.f);
-                        where(r2 > 0.0f, fac) = m * f;
-
-                        using SimdizedType = decltype(makeSimdized<SimdType::width()>(move));
-                        return SimdizedType{(fac * dxc), (fac * dyc), (fac * dzc)};
-                    },
-                    xx,
-                    yy,
-                    zz,
-                    mass);
-
-                /* No `+=` is used to be comparable with the original version.
-                 * This differs to the original publication but is necessary due to an OpenMP bug in the original
-                 * implementation.
+                /* Stage the partials into shared memory. Every index in [0, blockSize) is assigned exactly once:
+                 * indices [0, threads) receive the owning thread's partial and indices [threads, blockSize) are
+                 * explicitly zero-filled. The strided walk also covers the case threads < blockSize, where a thread
+                 * owns more than one shared slot, and leaves unused slots zeroed for the next particle iteration.
                  */
-                vx2[i] = move.x * fcoeff;
-                vy2[i] = move.y * fcoeff;
-                vz2[i] = move.z * fcoeff;
+                for(uint32_t k = tid; k < blockSize; k += threads)
+                {
+                    if(k < threads)
+                    {
+                        sx[k] = px;
+                        sy[k] = py;
+                        sz[k] = pz;
+                    }else
+                    {
+                        sx[k] = 0.f;
+                        sy[k] = 0.f;
+                        sz[k] = 0.f;
+                    }
+                }
+
+                // Make the staged partials visible to the whole block before the reduction reads them.
+                onAcc::syncBlockThreads(acc);
+
+                /* Converging tree reduction over the power-of-two range [0, nextPow2). Writes touch [0, s) while
+                 * reads touch [s, 2s), i.e. the two sets are disjoint within one step; the sync at the end of each
+                 * step orders the next step. `nextPow2 <= blockSize` guarantees in-bounds access.
+                 */
+                for(uint32_t s = nextPow2 / 2u; s > 0u; s >>= 1u)
+                {
+                    if(tid < s)
+                    {
+                        sx[tid] += sx[tid + s];
+                        sy[tid] += sy[tid + s];
+                        sz[tid] += sz[tid + s];
+                    }
+                    onAcc::syncBlockThreads(acc);
+                }
+
+                // A single thread publishes the block result. The arithmetic matches the reference: sum the
+                // per-particle contributions and multiply once by fcoeff.
+                for([[maybe_unused]] auto idx : onAcc::makeIdxMap(acc, onAcc::worker::threadsInBlock, IdxRange{1u}))
+                {
+                    vx2[i] = sx[0] * fcoeff;
+                    vy2[i] = sy[0] * fcoeff;
+                    vz2[i] = sz[0] * fcoeff;
+                }
+
+                // Do not let a block start the next particle before every thread finished reading the shared sums.
+                onAcc::syncBlockThreads(acc);
             }
         }
     };
@@ -160,17 +187,14 @@ namespace haccmkAlpaka
         onHost::memcpy(queue, d_zz, zz);
         onHost::memcpy(queue, d_mass, mass);
 
-        auto devProps = devAcc.getDeviceProperties();
-        // 8 is used for GPUs to provide at least frames to each multiprocessor
-        uint32_t suggestedNumFrames = devProps.multiProcessorCount * 8u;
-        // crop to the outer loop count if needed
-        int numeFrames = std::min(n1, static_cast<int>(suggestedNumFrames));
-        uint32_t possibleChunkSize = std::bit_floor(static_cast<uint32_t>(alpaka::divExZero(n1, numeFrames)));
-        uint32_t numElementsPerThread = getNumElemPerThread<float>(devAcc.getApi(), devAcc.getDeviceKind());
-        uint32_t frameExtent = alpaka::divExZero(possibleChunkSize, numElementsPerThread);
-        frameExtent = std::bit_floor(frameExtent);
-        frameExtent = frameExtent < devProps.warpSize ? devProps.warpSize : frameExtent;
-        auto frameSpec = onHost::FrameSpec{numeFrames, static_cast<int>(frameExtent), exec};
+        // One block per active particle gives the most parallelism and hides the reduction latency best;
+        // the kernel's grid-stride loop keeps this correct if fewer blocks are used.
+        int const numFrames = std::max(1, n1);
+        // The cooperative kernel relies on a block-per-frame mapping; the shared tree reduction uses blockSize slots.
+        auto frameSpec = onHost::FrameSpec{
+            numFrames,
+            static_cast<int>(Step10KernelCoop::blockSize),
+            exec};
 
         std::cout << "FrameSpec " << frameSpec << std::endl;
 
@@ -187,7 +211,7 @@ namespace haccmkAlpaka
             auto start = std::chrono::steady_clock::now();
 
             auto const haccKernel = KernelBundle{
-                Step10Kernel{},
+                Step10KernelCoop{},
                 n1,
                 n2,
                 d_xx,
