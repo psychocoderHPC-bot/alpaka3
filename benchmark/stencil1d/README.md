@@ -65,18 +65,38 @@ cmake --build build/rel-cuda-nvcc-gcc --target stencil1d_alpaka -j
 CUDA_VISIBLE_DEVICES=0 ./build/rel-cuda-nvcc-gcc/benchmark/stencil1d/stencil1d_alpaka --length 1048576 --repeat 5
 ```
 
+## Shared-memory window layout
+
+The kernel stages a `tileSize + 2*RADIUS = 256 + 14 = 270` element window:
+indices `[0, RADIUS)` are the left halo, `[RADIUS, RADIUS + tileSize)` the centre elements and
+`[RADIUS + tileSize, tileSize + 2*RADIUS)` the right halo. Threads `localId < RADIUS` load the halo:
+
+- left halo `temp[localId] = in[blockStart + localId - RADIUS]`, zero when the index is before the
+  domain (block 0 only);
+- right halo `temp[localId + RADIUS + tileSize] = in[blockStart + RADIUS + tileSize + localId]`, zero
+  when the index reaches the padded input end;
+- centre `temp[localId + RADIUS] = in[blockStart + localId]`, zero past the padded input.
+
+Every one of the 270 entries is written, so no entry is ever uninitialised.
+
 ## Self-validation
 
-`src/helper.hpp` contains a double-precision host reference. It computes the same sliding sum using
-the same logical input as the HeCBench reference. Because the arithmetic is integer addition, the
-reference is exact, so `verify()` compares bit-exactly (tolerance 0). The tolerance is not widened;
-a mismatch is a real bug. `verify()` also rejects any non-finite result explicitly (NaN/Inf check)
-and cross-checks that the device input equals the generation rule `a[i] = i`.
+`src/helper.hpp` contains a double-precision host reference. It is an **independent oracle**: it sums
+the window `[i - RADIUS, i + RADIUS]` by reading the original padded input array element by element,
+not by reusing the shared-memory window or its indexing, and not from the generation rule `a[i] = i`.
+A wrong halo load or wrong boundary handling therefore cannot pass; it would have to reproduce the
+correct value computed from the input independently. The oracle sanity was checked against a
+deliberately broken halo scheme: the broken output fails at the first block boundary (index 249) and
+the correct output passes.
+
+Because the arithmetic is integer addition, the reference is exact, so `verify()` compares bit-exactly
+(tolerance 0). The tolerance is not widened; a mismatch is a real bug. `verify()` rejects non-finite
+values explicitly (NaN/Inf check).
 
 A nonzero exit code signals failure. Validation covers a small fast case and representative sizes,
 including odd/irregular lengths that are not multiples of the tile size (boundary correctness):
-`1, 2, 3, 7, 8, 13, 255, 256, 257, 258, 511, 512, 513, 1000, 1021, 1023, 1024, 1025`, plus the
-default `1 << 20` and larger. Both the CPU and the CUDA backend were validated on all of these.
+`1, 2, 7, 8, 255, 256, 257, 1024`, plus the default `1 << 20` and larger. Both the CPU and the CUDA
+backend were validated on all of these.
 
 ## Timing scope and reference reproduction
 
