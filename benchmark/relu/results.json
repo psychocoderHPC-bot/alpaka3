@@ -1,0 +1,157 @@
+{
+  "benchmark": "relu",
+  "hecbench": {
+    "repo": "https://github.com/zjin-lcf/HeCBench",
+    "commit": "0a17ee47ca6072192101036d4bf292e6612f22e6",
+    "source_files": {
+      "relu-cuda/main.cu": "3a5d1f330a5733e7f12fab15a9b3d919067bd900",
+      "relu-omp/main.cpp": "b749abbba3f0a40e99e1da7005aa7ed68298acf7",
+      "relu-cuda/reference.h": "371d8e6a6d666e72c21b9d67415db18b8ec1f5c5"
+    },
+    "license": "Apache-2.0 (TensorFlow-derived)"
+  },
+  "alpaka": {
+    "base_commit": "6f13700c390a09df818a255d53e730f1f9d69456",
+    "branch": "benchmark/relu",
+    "commit": "e9b688e5d3e2c156533ea141e9cccf655705c2fa",
+    "measured_commit": "1a3829ee0a3ae92bcdec0b6a1b7865085343c61d",
+    "note": "results were gathered on measured_commit; e9b688e5 (published) only vectorizes the fp16 loads on top of it"
+  },
+  "sampling": "one discarded warmup, then --repeat 5 measured iterations; reported value is the median (crossing <5% across samples except CPU serial)",
+  "environment": {
+    "cpu": "local 14-core x86_64, GCC 13.3, -O3, alpaka backend CpuOmpBlocks / CpuSerial",
+    "gpu": "rosi_v100: NVIDIA Tesla V100-SXM2-32GB, sm_70, CUDA 12.6, g++ 13.2, alpaka backend GpuCuda"
+  },
+  "reference_caveats": [
+    "CPU ratios are indicative, not like-for-like: the HeCBench OpenMP reference is an offload program (num_threads(256)) that oversubscribes 14 cores when run host-side."
+  ],
+  "results": [
+    {
+      "config": "10M",
+      "kernel": "ReluGrad",
+      "data_type": "fp16",
+      "backend": "CpuOmpBlocks",
+      "platform": "cpu",
+      "alpaka_median_us": 10131.5,
+      "reference_median_us": 24140.9,
+      "reference": "HeCBench OMP best-vectorized impl",
+      "ratio_alpaka_over_ref": 0.42,
+      "variation_max_pct": 3.5,
+      "validation": "PASS"
+    },
+    {
+      "config": "10M",
+      "kernel": "Relu",
+      "data_type": "int8x4",
+      "backend": "CpuOmpBlocks",
+      "platform": "cpu",
+      "alpaka_median_us": 2810.0,
+      "reference_median_us": 15819.9,
+      "reference": "HeCBench OMP best-vectorized impl",
+      "ratio_alpaka_over_ref": 0.18,
+      "variation_max_pct": 3.5,
+      "validation": "PASS"
+    },
+    {
+      "config": "10M",
+      "kernel": "ReluGrad",
+      "data_type": "fp16",
+      "backend": "CpuSerial",
+      "platform": "cpu",
+      "alpaka_median_us": 62730.4,
+      "reference_median_us": 24140.9,
+      "reference": "HeCBench OMP best-vectorized impl",
+      "ratio_alpaka_over_ref": 2.60,
+      "variation_max_pct": 8.5,
+      "validation": "PASS"
+    },
+    {
+      "config": "20M",
+      "kernel": "ReluGrad",
+      "data_type": "fp16",
+      "backend": "CpuOmpBlocks",
+      "platform": "cpu",
+      "alpaka_median_us": 26825.7,
+      "reference_median_us": 33134.8,
+      "reference": "HeCBench OMP best-vectorized impl",
+      "ratio_alpaka_over_ref": 0.81,
+      "variation_max_pct": 3.5,
+      "validation": "PASS"
+    },
+    {
+      "config": "20M",
+      "kernel": "Relu",
+      "data_type": "int8x4",
+      "backend": "CpuOmpBlocks",
+      "platform": "cpu",
+      "alpaka_median_us": 5076.7,
+      "reference_median_us": 19137.9,
+      "reference": "HeCBench OMP best-vectorized impl",
+      "ratio_alpaka_over_ref": 0.27,
+      "variation_max_pct": 3.5,
+      "validation": "PASS"
+    },
+    {
+      "config": "10M",
+      "kernel": "ReluGrad",
+      "data_type": "fp16",
+      "backend": "GpuCuda",
+      "platform": "gpu",
+      "alpaka_median_us": 123.9,
+      "reference_median_us": 105.5,
+      "reference": "HeCBench CUDA impl1 (half2)",
+      "ratio_alpaka_over_ref": 1.17,
+      "variation_max_pct": 3.5,
+      "validation": "PASS"
+    },
+    {
+      "config": "10M",
+      "kernel": "Relu",
+      "data_type": "int8x4",
+      "backend": "GpuCuda",
+      "platform": "gpu",
+      "alpaka_median_us": 118.0,
+      "reference_median_us": 114.3,
+      "reference": "HeCBench CUDA impl1",
+      "ratio_alpaka_over_ref": 1.03,
+      "variation_max_pct": 3.5,
+      "validation": "PASS"
+    },
+    {
+      "config": "100M",
+      "kernel": "ReluGrad",
+      "data_type": "fp16",
+      "backend": "GpuCuda",
+      "platform": "gpu",
+      "alpaka_median_us": 1071.2,
+      "reference_median_us": 780.7,
+      "reference": "HeCBench CUDA impl1 (half2)",
+      "ratio_alpaka_over_ref": 1.37,
+      "variation_max_pct": 3.5,
+      "validation": "PASS",
+      "note": "alpaka uses the impl1-equivalent half2 algorithm; HeCBench impl2 is faster on ReluGrad (81.7/727.6 us at 10M/100M)"
+    },
+    {
+      "config": "100M",
+      "kernel": "Relu",
+      "data_type": "int8x4",
+      "backend": "GpuCuda",
+      "platform": "gpu",
+      "alpaka_median_us": 1077.8,
+      "reference_median_us": 1045.5,
+      "reference": "HeCBench CUDA impl1",
+      "ratio_alpaka_over_ref": 1.03,
+      "variation_max_pct": 3.5,
+      "validation": "PASS"
+    }
+  ],
+  "repro_commands": {
+    "cpu_build": "cmake --preset rel-host-cpu-gcc -Dalpaka_COMPILE_PEDANTIC=ON . && cmake --build build/rel-host-cpu-gcc --target relu_alpaka -j",
+    "cpu_run": "./build/rel-host-cpu-gcc/benchmark/relu/relu_alpaka --size 10000000 --repeat 5",
+    "gpu_build": "PATH=/usr/local/cuda-12.6/bin:$PATH CUDA_HOME=/usr/local/cuda-12.6 cmake --preset rel-cuda-nvcc-gcc -DCMAKE_CUDA_ARCHITECTURES=70 -Dalpaka_COMPILE_PEDANTIC=ON . && cmake --build build/rel-cuda-nvcc-gcc --target relu_alpaka -j",
+    "gpu_run": "./build/rel-cuda-nvcc-gcc/benchmark/relu/relu_alpaka --size 10000000 --repeat 5",
+    "cta_test": "ctest --test-dir build/rel-host-cpu-gcc -R relu_alpaka",
+    "reference_cuda": "nvcc -std=c++17 -Xcompiler -Wall -arch=sm_70 -O3 src/relu-cuda/main.cu -o main ; ./main 10000000 5",
+    "reference_omp": "g++ -O2 -fopenmp -std=c++17 -I../relu-cuda main.cpp -o main_omp ; OMP_NUM_THREADS=14 ./main_omp 10000000 5"
+  }
+}
