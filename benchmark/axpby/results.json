@@ -1,0 +1,54 @@
+{
+  "benchmark": "axpby",
+  "hecbench": {
+    "repo": "https://github.com/ORNL/HeCBench",
+    "commit": "0a17ee47ca6072192101036d4bf292e6612f22e6",
+    "source_files": {
+      "axpby-cuda/main.cu": {"sha256": "1d95cef0013eec212ce5616029a24b3d702cea50a05f301a10ebfbf1088de50c"},
+      "axpby-cuda/multi_tensor_apply.cuh": {"sha256": "13118aa1ca3998212bcea0df909bd13237f3c7acbd856cfb19c8b1fe5dfa9954"},
+      "axpby-omp/main.cpp": {"sha256": "f2239a7088afa89ad53cda23d3990607d024be1b3da57201441d8bacd2a4aae5"}
+    },
+    "license": "MIT (PyTorch multi-tensor-apply derived)"
+  },
+  "alpaka": {
+    "base_commit": "6f13700c390a09df818a255d53e730f1f9d69456",
+    "branch": "benchmark/axpby",
+    "commit": "4a66cf3efdbabcef50fbb39d0a4733a0976d85ea"
+  },
+  "sampling": "one discarded warm-up, then --repeat 5 measured iterations; reported value is the median. GPU 1000-tensor row aggregates 4 independent runs, 2000-tensor row 2 runs; CPU rows 5 runs.",
+  "timing_scope": "kernel enqueue + device synchronization only",
+  "environment": {
+    "cpu": "local 14-core x86_64, GCC 13.3.0, -O3, OMP_NUM_THREADS=14, alpaka backend CpuOmpBlocks / CpuSerial",
+    "gpu": "rosi_v100: NVIDIA Tesla V100-SXM2-32GB, sm_70, CUDA 12.6, g++ 13.2, alpaka backend GpuCuda"
+  },
+  "tolerance": {
+    "absolute": 1e-3,
+    "relative": 1e-6,
+    "rationale": "Inputs are non-negative integers < 2^20 with a=b=1, so x+y < 2^24 is exact in fp32 and the double reference is exact; the relative term only absorbs contraction differences."
+  },
+  "reference_caveats": [
+    "The HeCBench OpenMP reference is an OpenMP-offload program; host-side its target-teams fallback serialises, so CPU ratios are indicative, not like-for-like. CpuOmpBlocks is the meaningful CPU number."
+  ],
+  "results": [
+    {"config": "1000 tensors (519,866,146 elements)", "chunk_size": 512, "data_type": "fp32", "backend": "GpuCuda", "platform": "gpu", "alpaka_median_us": 9455.451, "reference_median_us": 20506.0, "reference": "HeCBench CUDA multi_tensor_axpby chunk512", "ratio_alpaka_over_ref": 0.46, "variation_us": 33.477, "validation": "PASS"},
+    {"config": "2000 tensors (1,045,976,816 elements)", "chunk_size": 512, "data_type": "fp32", "backend": "GpuCuda", "platform": "gpu", "alpaka_median_us": 19142.410, "reference_median_us": 40968.8, "reference": "HeCBench CUDA multi_tensor_axpby chunk512", "ratio_alpaka_over_ref": 0.47, "variation_us": 13.864, "validation": "PASS"},
+    {"config": "50 tensors (28,639,101 elements)", "chunk_size": 512, "data_type": "fp32", "backend": "CpuOmpBlocks", "platform": "cpu", "alpaka_median_us": 8776.726, "reference_median_us": 1679035.0, "reference": "HeCBench OMP offload chunk512", "ratio_alpaka_over_ref": 0.005, "variation_us": 1751.349, "validation": "PASS"},
+    {"config": "50 tensors (28,639,101 elements)", "chunk_size": 512, "data_type": "fp32", "backend": "CpuSerial", "platform": "cpu", "alpaka_median_us": 14133.491, "reference_median_us": 1679035.0, "reference": "HeCBench OMP offload chunk512", "ratio_alpaka_over_ref": 0.008, "variation_us": 1918.596, "validation": "PASS"},
+    {"config": "200 tensors (110,219,593 elements)", "chunk_size": 512, "data_type": "fp32", "backend": "CpuOmpBlocks", "platform": "cpu", "alpaka_median_us": 40871.804, "reference_median_us": 6562221.5, "reference": "HeCBench OMP offload chunk512", "ratio_alpaka_over_ref": 0.006, "variation_us": 8259.301, "validation": "PASS"},
+    {"config": "200 tensors (110,219,593 elements)", "chunk_size": 512, "data_type": "fp32", "backend": "CpuSerial", "platform": "cpu", "alpaka_median_us": 54958.741, "reference_median_us": 6562221.5, "reference": "HeCBench OMP offload chunk512", "ratio_alpaka_over_ref": 0.008, "variation_us": 7568.636, "validation": "PASS"}
+  ],
+  "irregular_validation": [
+    "4x4093/chunk512 PASS",
+    "1x2/chunk1 PASS",
+    "3x257/chunk256 PASS",
+    "5x1000/chunk7 PASS"
+  ],
+  "repro_commands": [
+    "cmake --preset rel-host-cpu-gcc -Dalpaka_COMPILE_PEDANTIC=ON -Dalpaka_TESTS=OFF -Dalpaka_EXAMPLES=OFF -Dalpaka_DOCS=OFF -S . -B build/rel-host-cpu-gcc",
+    "cmake --build build/rel-host-cpu-gcc --target axpby_alpaka -j",
+    "OMP_NUM_THREADS=14 ./build/rel-host-cpu-gcc/benchmark/axpby/axpby_alpaka --tensors 50 --chunk-size 512 --repeat 5",
+    "cmake --preset rel-cuda-nvcc-gcc -DCMAKE_CUDA_ARCHITECTURES=70 -Dalpaka_COMPILE_PEDANTIC=ON -Dalpaka_TESTS=OFF -Dalpaka_EXAMPLES=OFF -Dalpaka_DOCS=OFF -S . -B build/rel-cuda-nvcc-gcc",
+    "cmake --build build/rel-cuda-nvcc-gcc --target axpby_alpaka -j 8",
+    "CUDA_VISIBLE_DEVICES=2 ./build/rel-cuda-nvcc-gcc/benchmark/axpby/axpby_alpaka --tensors 1000 --chunk-size 512 --repeat 5"
+  ]
+}
