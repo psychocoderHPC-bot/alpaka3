@@ -7,8 +7,9 @@
 
 #include <alpaka/alpaka.hpp>
 
-#include <bit>
+#include <algorithm>
 #include <chrono>
+#include <cstdint>
 #include <iostream>
 
 namespace haccmkAlpaka
@@ -42,7 +43,23 @@ namespace haccmkAlpaka
         return result;
     }
 
-    struct Step10Kernel
+    /** Warp-shuffle variant of the HACCmk Step10 kernel.
+     *
+     * One warp is responsible for one active particle at a time (the `linearWarpsInGrid` map lets a warp process
+     * several particles in a grid-stride loop). The inner `n2` reduction is split across the warp lanes via
+     * `SimdAlgo{worker::linearThreadsInWarp}` so that each lane gets a SIMD-vectorized partial. The per-lane
+     * `DeltaMove` partials are combined with a `shflDown` butterfly reduction that needs no shared memory; lane 0
+     * finally scales the warp sum by `fcoeff`.
+     *
+     * The kernel is written with backend independent `onAcc` facilities only, so it compiles unchanged for the
+     * CPU, CUDA, HIP and SYCL backends.
+     *
+     * On GPUs several warps are packed into one block (`warpsPerBlock = 8`) so the SMs hold more resident warps
+     * and are filled; on host executors a warp is a single thread, so the block stays at one thread and the host
+     * executor keeps one thread per frame. The outer `linearWarpsInGrid` map is grid-stride, so the total warp
+     * count does not need to divide the number of active particles.
+     */
+    struct Step10KernelWarpShuffle
     {
         ALPAKA_FN_ACC auto operator()(
             auto const& acc,
@@ -63,21 +80,24 @@ namespace haccmkAlpaka
 
             constexpr float const ma0 = 0.269327, ma1 = -0.0750978, ma2 = 0.0114808, ma3 = -0.00109313,
                                   ma4 = 0.0000605491, ma5 = -0.00000147177;
+            constexpr uint32_t const warpSize = ALPAKA_TYPEOF(acc)::getWarpSize();
+            uint32_t const lane = onAcc::warp::getLaneIdx(acc);
 
-            for(auto i :
-                alpaka::onAcc::makeIdxMap(acc, alpaka::onAcc::worker::linearThreadsInGrid, alpaka::IdxRange{n1}))
+            // Outer loop over active particles: each warp handles a grid-stride subset of [0, n1).
+            for(auto i : onAcc::makeIdxMap(acc, onAcc::worker::linearWarpsInGrid, IdxRange{n1}))
             {
-                auto move = DeltaMove<float>{0, 0, 0};
-
                 float xxi = xx[i];
                 float yyi = yy[i];
                 float zzi = zz[i];
 
-                auto simdGrid = onAcc::SimdAlgo{onAcc::worker::allThreads};
+                // Per-lane SIMD-vectorized partial of the inner n2 reduction; transformReduce already returns a
+                // scalar DeltaMove<float>.
+                DeltaMove<float> move{0, 0, 0};
+                auto simdGrid = onAcc::SimdAlgo{onAcc::worker::linearThreadsInWarp};
                 move = simdGrid.transformReduce(
                     acc,
                     Vec{n2},
-                    move,
+                    DeltaMove<float>{0, 0, 0},
                     std::plus{},
                     [&](auto const&,
                         concepts::Simd auto const& simd_xx1,
@@ -114,13 +134,29 @@ namespace haccmkAlpaka
                     zz,
                     mass);
 
-                /* No `+=` is used to be comparable with the original version.
-                 * This differs to the original publication but is necessary due to an OpenMP bug in the original
-                 * implementation.
-                 */
-                vx2[i] = move.x * fcoeff;
-                vy2[i] = move.y * fcoeff;
-                vz2[i] = move.z * fcoeff;
+                // Warp-shuffle butterfly reduction, no shared memory. After the dance only lane 0 holds the sum.
+                // `shflDown` is applied per scalar component because the intrinsic cannot exchange a struct.
+                if constexpr(warpSize > 1u)
+                {
+                    for(uint32_t delta = warpSize / 2u; delta > 0u; delta >>= 1u)
+                    {
+                        DeltaMove<float> other{
+                            onAcc::warp::shflDown(acc, move.x, delta),
+                            onAcc::warp::shflDown(acc, move.y, delta),
+                            onAcc::warp::shflDown(acc, move.z, delta)};
+                        if(lane < delta)
+                            move = move + other;
+                    }
+                }
+
+                // A single lane publishes the warp result. The arithmetic matches the reference: sum the
+                // per-particle contributions and multiply once by fcoeff.
+                if(lane == 0u)
+                {
+                    vx2[i] = move.x * fcoeff;
+                    vy2[i] = move.y * fcoeff;
+                    vz2[i] = move.z * fcoeff;
+                }
             }
         }
     };
@@ -160,17 +196,18 @@ namespace haccmkAlpaka
         onHost::memcpy(queue, d_zz, zz);
         onHost::memcpy(queue, d_mass, mass);
 
+        // One warp owns exactly one active particle. On GPUs the physical warp size is 32 (1 on host
+        // executors), so pack `warpsPerBlock` warps into a block to give each SM several resident warps and fill
+        // the SMs. On the CPU a warp is a single thread, so the block stays at one thread and the host executor
+        // keeps one thread per frame.
         auto devProps = devAcc.getDeviceProperties();
-        // 8 is used for GPUs to provide at least frames to each multiprocessor
-        uint32_t suggestedNumFrames = devProps.multiProcessorCount * 8u;
-        // crop to the outer loop count if needed
-        int numeFrames = std::min(n1, static_cast<int>(suggestedNumFrames));
-        uint32_t possibleChunkSize = std::bit_floor(static_cast<uint32_t>(alpaka::divExZero(n1, numeFrames)));
-        uint32_t numElementsPerThread = getNumElemPerThread<float>(devAcc.getApi(), devAcc.getDeviceKind());
-        uint32_t frameExtent = alpaka::divExZero(possibleChunkSize, numElementsPerThread);
-        frameExtent = std::bit_floor(frameExtent);
-        frameExtent = frameExtent < devProps.warpSize ? devProps.warpSize : frameExtent;
-        auto frameSpec = onHost::FrameSpec{numeFrames, static_cast<int>(frameExtent), exec};
+        uint32_t const warpSize = devProps.warpSize;
+        uint32_t const warpsPerBlock = warpSize > 1u ? 8u : 1u;
+        uint32_t const threadsPerBlock = warpSize * warpsPerBlock;
+        // Linear warp i in [0,n1) is mapped by linearWarpsInGrid; n1 need not divide the warp count
+        // (the grid-stride loop drops the surplus warps).
+        auto numFrames = Vec<uint32_t, 1u>{divCeil(static_cast<uint32_t>(std::max(n1, 1)), warpsPerBlock)};
+        auto frameSpec = onHost::FrameSpec{numFrames, threadsPerBlock, exec};
 
         std::cout << "FrameSpec " << frameSpec << std::endl;
 
@@ -187,7 +224,7 @@ namespace haccmkAlpaka
             auto start = std::chrono::steady_clock::now();
 
             auto const haccKernel = KernelBundle{
-                Step10Kernel{},
+                Step10KernelWarpShuffle{},
                 n1,
                 n2,
                 d_xx,
