@@ -8,7 +8,6 @@
 #include <alpaka/alpaka.hpp>
 
 #include <algorithm>
-#include <bit>
 #include <chrono>
 #include <cstdint>
 #include <iostream>
@@ -44,22 +43,24 @@ namespace haccmkAlpaka
         return result;
     }
 
-    /** Hybrid variant of the HACCmk Step10 kernel: SIMD inner loop spread across a thread block.
+    /** Warp-shuffle variant of the HACCmk Step10 kernel.
      *
-     * One thread block is responsible for one active particle at a time (the `blocksInGrid` map lets a block
-     * process several particles in a grid-stride loop). The inner `n2` reduction is split across the block's
-     * threads via `SimdAlgo{worker::threadsInBlock}` so that each thread gets a SIMD-vectorized partial. The
-     * per-thread `DeltaMove` partials are staged into shared memory and combined with a converging tree
-     * reduction; thread 0 finally scales the block sum by `fcoeff`.
+     * One warp is responsible for one active particle at a time (the `linearWarpsInGrid` map lets a warp process
+     * several particles in a grid-stride loop). The inner `n2` reduction is split across the warp lanes via
+     * `SimdAlgo{worker::linearThreadsInWarp}` so that each lane gets a SIMD-vectorized partial. The per-lane
+     * `DeltaMove` partials are combined with a `shflDown` butterfly reduction that needs no shared memory; lane 0
+     * finally scales the warp sum by `fcoeff`.
      *
      * The kernel is written with backend independent `onAcc` facilities only, so it compiles unchanged for the
      * CPU, CUDA, HIP and SYCL backends.
+     *
+     * On GPUs several warps are packed into one block (`warpsPerBlock = 8`) so the SMs hold more resident warps
+     * and are filled; on host executors a warp is a single thread, so the block stays at one thread and the host
+     * executor keeps one thread per frame. The outer `linearWarpsInGrid` map is grid-stride, so the total warp
+     * count does not need to divide the number of active particles.
      */
-    struct Step10KernelSimdCoop
+    struct Step10KernelWarpShuffle
     {
-        /** Logical number of threads per frame. `FrameSpec` frame extent and shared memory sizing both use it. */
-        static constexpr uint32_t blockSize = 128u;
-
         ALPAKA_FN_ACC auto operator()(
             auto const& acc,
             int n1,
@@ -79,34 +80,20 @@ namespace haccmkAlpaka
 
             constexpr float const ma0 = 0.269327, ma1 = -0.0750978, ma2 = 0.0114808, ma3 = -0.00109313,
                                   ma4 = 0.0000605491, ma5 = -0.00000147177;
+            constexpr uint32_t const warpSize = ALPAKA_TYPEOF(acc)::getWarpSize();
+            uint32_t const lane = onAcc::warp::getLaneIdx(acc);
 
-            // Shared staging buffers for the per-thread partial sums, one per component.
-            auto sx = onAcc::declareSharedMdArray<float, uniqueId()>(acc, CVec<uint32_t, blockSize>{});
-            auto sy = onAcc::declareSharedMdArray<float, uniqueId()>(acc, CVec<uint32_t, blockSize>{});
-            auto sz = onAcc::declareSharedMdArray<float, uniqueId()>(acc, CVec<uint32_t, blockSize>{});
-
-            // Runtime block geometry. The physical thread count is not guaranteed to equal `blockSize`; on host
-            // backends the frame may be executed with fewer threads and for a frame extent below the warp size the
-            // backend may use more. All reduction code below therefore depends on the runtime values only.
-            uint32_t const threads = static_cast<uint32_t>(acc[layer::thread].count().product());
-            uint32_t const tid
-                = static_cast<uint32_t>(linearize(acc[layer::thread].count(), acc[layer::thread].idx()));
-            // Smallest power of two that covers all participating threads, bounded by the shared array size.
-            // (A ternary avoids binding a reference to the static constexpr member, which nvcc cannot
-            //  materialize in device code.)
-            uint32_t const nextPow2Candidate = std::bit_ceil(threads > 0u ? threads : 1u);
-            uint32_t const nextPow2 = nextPow2Candidate < blockSize ? nextPow2Candidate : blockSize;
-
-            // Outer loop over active particles: each block handles a grid-stride subset of [0, n1).
-            for(auto i : onAcc::makeIdxMap(acc, onAcc::worker::blocksInGrid, IdxRange{n1}))
+            // Outer loop over active particles: each warp handles a grid-stride subset of [0, n1).
+            for(auto i : onAcc::makeIdxMap(acc, onAcc::worker::linearWarpsInGrid, IdxRange{n1}))
             {
                 float xxi = xx[i];
                 float yyi = yy[i];
                 float zzi = zz[i];
 
-                // Per-thread SIMD-vectorized partial of the inner n2 reduction.
+                // Per-lane SIMD-vectorized partial of the inner n2 reduction; transformReduce already returns a
+                // scalar DeltaMove<float>.
                 DeltaMove<float> move{0, 0, 0};
-                auto simdGrid = onAcc::SimdAlgo{onAcc::worker::threadsInBlock};
+                auto simdGrid = onAcc::SimdAlgo{onAcc::worker::linearThreadsInWarp};
                 move = simdGrid.transformReduce(
                     acc,
                     Vec{n2},
@@ -147,55 +134,29 @@ namespace haccmkAlpaka
                     zz,
                     mass);
 
-                /* Stage the partials into shared memory. Every index in [0, blockSize) is assigned exactly once:
-                 * indices [0, threads) receive the owning thread's partial and indices [threads, blockSize) are
-                 * explicitly zero-filled. The strided walk also covers the case threads < blockSize, where a thread
-                 * owns more than one shared slot, and leaves unused slots zeroed for the next particle iteration.
-                 */
-                for(uint32_t k = tid; k < blockSize; k += threads)
+                // Warp-shuffle butterfly reduction, no shared memory. After the dance only lane 0 holds the sum.
+                // `shflDown` is applied per scalar component because the intrinsic cannot exchange a struct.
+                if constexpr(warpSize > 1u)
                 {
-                    if(k < threads)
+                    for(uint32_t delta = warpSize / 2u; delta > 0u; delta >>= 1u)
                     {
-                        sx[k] = move.x;
-                        sy[k] = move.y;
-                        sz[k] = move.z;
-                    }else
-                    {
-                        sx[k] = 0.f;
-                        sy[k] = 0.f;
-                        sz[k] = 0.f;
+                        DeltaMove<float> other{
+                            onAcc::warp::shflDown(acc, move.x, delta),
+                            onAcc::warp::shflDown(acc, move.y, delta),
+                            onAcc::warp::shflDown(acc, move.z, delta)};
+                        if(lane < delta)
+                            move = move + other;
                     }
                 }
 
-                // Make the staged partials visible to the whole block before the reduction reads them.
-                onAcc::syncBlockThreads(acc);
-
-                /* Converging tree reduction over the power-of-two range [0, nextPow2). Writes touch [0, s) while
-                 * reads touch [s, 2s), i.e. the two sets are disjoint within one step; the sync at the end of each
-                 * step orders the next step. `nextPow2 <= blockSize` guarantees in-bounds access.
-                 */
-                for(uint32_t s = nextPow2 / 2u; s > 0u; s >>= 1u)
-                {
-                    if(tid < s)
-                    {
-                        sx[tid] += sx[tid + s];
-                        sy[tid] += sy[tid + s];
-                        sz[tid] += sz[tid + s];
-                    }
-                    onAcc::syncBlockThreads(acc);
-                }
-
-                // A single thread publishes the block result. The arithmetic matches the reference: sum the
+                // A single lane publishes the warp result. The arithmetic matches the reference: sum the
                 // per-particle contributions and multiply once by fcoeff.
-                for([[maybe_unused]] auto idx : onAcc::makeIdxMap(acc, onAcc::worker::threadsInBlock, IdxRange{1u}))
+                if(lane == 0u)
                 {
-                    vx2[i] = sx[0] * fcoeff;
-                    vy2[i] = sy[0] * fcoeff;
-                    vz2[i] = sz[0] * fcoeff;
+                    vx2[i] = move.x * fcoeff;
+                    vy2[i] = move.y * fcoeff;
+                    vz2[i] = move.z * fcoeff;
                 }
-
-                // Do not let a block start the next particle before every thread finished reading the shared sums.
-                onAcc::syncBlockThreads(acc);
             }
         }
     };
@@ -235,14 +196,18 @@ namespace haccmkAlpaka
         onHost::memcpy(queue, d_zz, zz);
         onHost::memcpy(queue, d_mass, mass);
 
-        // One block per active particle gives the most parallelism and hides the reduction latency best;
-        // the kernel's grid-stride loop keeps this correct if fewer blocks are used.
-        int const numFrames = std::max(1, n1);
-        // The cooperative kernel relies on a block-per-frame mapping; the shared tree reduction uses blockSize slots.
-        auto frameSpec = onHost::FrameSpec{
-            numFrames,
-            static_cast<int>(Step10KernelSimdCoop::blockSize),
-            exec};
+        // One warp owns exactly one active particle. On GPUs the physical warp size is 32 (1 on host
+        // executors), so pack `warpsPerBlock` warps into a block to give each SM several resident warps and fill
+        // the SMs. On the CPU a warp is a single thread, so the block stays at one thread and the host executor
+        // keeps one thread per frame.
+        auto devProps = devAcc.getDeviceProperties();
+        uint32_t const warpSize = devProps.warpSize;
+        uint32_t const warpsPerBlock = warpSize > 1u ? 8u : 1u;
+        uint32_t const threadsPerBlock = warpSize * warpsPerBlock;
+        // Linear warp i in [0,n1) is mapped by linearWarpsInGrid; n1 need not divide the warp count
+        // (the grid-stride loop drops the surplus warps).
+        auto numFrames = Vec<uint32_t, 1u>{divCeil(static_cast<uint32_t>(std::max(n1, 1)), warpsPerBlock)};
+        auto frameSpec = onHost::FrameSpec{numFrames, threadsPerBlock, exec};
 
         std::cout << "FrameSpec " << frameSpec << std::endl;
 
@@ -259,7 +224,7 @@ namespace haccmkAlpaka
             auto start = std::chrono::steady_clock::now();
 
             auto const haccKernel = KernelBundle{
-                Step10KernelSimdCoop{},
+                Step10KernelWarpShuffle{},
                 n1,
                 n2,
                 d_xx,
