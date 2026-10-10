@@ -18,8 +18,32 @@
 #include "alpaka/onHost/logger/logger.hpp"
 #include "alpaka/trait.hpp"
 
+#include <cmath>
+
 namespace alpaka::onHost::internal
 {
+    /** Initialize the single reduction result with the neutral element without a full frame-spec kernel launch.
+     *
+     * A zero neutral element is written with a byte-wise memset which maps to cudaMemsetAsync / std::memset and
+     * avoids any kernel. Any other value is written by a one-thread kernel. Both preserve the semantics of the
+     * previous frame-spec `fill()` call, i.e. the first output element is set before the reduce kernel's atomics.
+     */
+    struct ReduceInitKernel
+    {
+        template<typename T_DataType>
+        ALPAKA_FN_ACC void operator()(
+            onAcc::concepts::Acc auto const& acc,
+            alpaka::concepts::IMdSpan auto output,
+            T_DataType const& value) const
+        {
+            if(linearize(acc[alpaka::layer::thread].count(), acc[alpaka::layer::thread].idx()) == 0u
+               && linearize(acc[alpaka::layer::block].count(), acc[alpaka::layer::block].idx()) == 0u)
+            {
+                output.data()[0] = value;
+            }
+        }
+    };
+
     struct SimdTransformReduceKernel
     {
         uint32_t dynSharedMemBytes = 0u;
@@ -185,7 +209,21 @@ namespace alpaka::onHost::internal
                 return ss.str();
             });
 
-        onHost::fill(queue, ALPAKA_FORWARD(out), neutralElement, out.getExtents().fill(1));
+        if constexpr(std::is_arithmetic_v<T_DataType>)
+        {
+            // An all-zero byte pattern represents +0 for arithmetic types, so a byte-wise memset is exact.
+            // -0.0 compares equal to 0 but has a different bit pattern, hence the signbit guard.
+            if(neutralElement == T_DataType{0} && !std::signbit(neutralElement))
+                onHost::memset(queue, ALPAKA_FORWARD(out), uint8_t{0u}, out.getExtents().fill(1));
+            else
+                queue.enqueue(
+                    FrameSpec{1u, 1u, exec},
+                    KernelBundle{ReduceInitKernel{}, ALPAKA_FORWARD(out), neutralElement});
+        }
+        else
+        {
+            onHost::fill(queue, ALPAKA_FORWARD(out), neutralElement, out.getExtents().fill(1));
+        }
         queue.enqueue(
             frameSpec,
             KernelBundle{
