@@ -58,6 +58,29 @@ namespace popcountAlpaka
         return onHost::FrameSpec{std::max(blocks, 1u), chunkSize, exec};
     }
 
+    /** Validate that every host result is a well formed 64 bit popcount.
+     *
+     * The valid range is `[0, 64]`, i.e. `[0, 8 * sizeof(uint64_t)]`. This is an explicit
+     * self-validation guard on the host results, independent of the bit-exact comparison against
+     * the reference; it runs on the host, never inside the timed kernel.
+     *
+     * @return EXIT_SUCCESS when every value is in range, otherwise EXIT_FAILURE.
+     */
+    inline int checkRange(int count, auto const& out)
+    {
+        constexpr int maxPopcount = static_cast<int>(8u * sizeof(uint64_t));
+        for(int i = 0; i < count; ++i)
+        {
+            int const value = static_cast<int>(out[i]);
+            if(value < 0 || value > maxPopcount)
+            {
+                printf("range error at result[%d]: %d outside [0, %d]\n", i, value, maxPopcount);
+                return EXIT_FAILURE;
+            }
+        }
+        return EXIT_SUCCESS;
+    }
+
     /** Run `repeat` measured iterations of a kernel after one warm-up iteration.
      *
      * @return the median runtime in microseconds.
@@ -125,6 +148,9 @@ namespace popcountAlpaka
 
         onHost::memcpy(queue, hOut, dOut);
         onHost::wait(queue);
+        // Explicit host-side range self-validation, independent of the reference comparison.
+        if(int const rangeError = checkRange(count, hOut); rangeError != EXIT_SUCCESS)
+            return rangeError;
         return popcount::verify(count, hOut, hIn);
     }
 } // namespace popcountAlpaka

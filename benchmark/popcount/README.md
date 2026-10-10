@@ -19,6 +19,21 @@ intrinsic abstraction `alpaka::popcount`. On the host it lowers to `std::popcoun
 hardware to the native `__popcll`, i.e. the fastest of the reference variants. Using the alpaka
 abstraction keeps exactly one portable algorithm for every backend.
 
+## Scope and implemented variant
+
+This port implements **only the intrinsic / hardware popcount path** (`std::popcount` on the host,
+`__popcll` on CUDA), matching the reference's `pc6` variant. The other HeCBench reference variants
+are **intentionally out of scope** and are not reproduced:
+
+* the SWAR bit-trick variants (`m1`/`m2`/`m4`/`h01` masks),
+* Kernighan's `x &= x - 1` loop in the *measured* path (it is retained only as the host
+  **reference** used by validation),
+* the 256-entry lookup-table variant,
+* the `__builtin_popcountll` host intrinsic variant.
+
+The reference exists to compare software strategies against the hardware instruction; this port
+deliberately benchmarks the one portable intrinsic that alpaka exposes across backends.
+
 ## Reference and provenance
 
 The implementation is a faithful adaptation of HeCBench at commit
@@ -34,6 +49,69 @@ The referenced CUDA/OpenMP sources are **not** vendored here.
 Data generation matches the reference: `srand(2)` and two `rand()` draws per element, the first
 shifted into the high 32 bits and OR-ed with the second, i.e. `data[i] = ((uint64_t)rand() << 32) | rand()`.
 This reproduces the reference input bit for bit.
+
+## License and attribution
+
+The port is an independent C++20 alpaka implementation. No HeCBench source file is copied or
+vendored into this repository; the HeCBench reference is consulted at the pinned commit above.
+
+HeCBench (the original work) is:
+
+> Copyright (c) 2020, Argonne National Laboratory (Zheming Jin)  
+> Copyright (c) 2020-, Oak Ridge National Laboratory (Zheming Jin)  
+> All rights reserved.
+
+and is distributed under the BSD 3-Clause License. The pinned
+[`LICENSE`](https://github.com/ORNL/HeCBench/blob/0a17ee47ca6072192101036d4bf292e6612f22e6/LICENSE)
+text is reproduced here as required by the license:
+
+```
+BSD 3-Clause License
+
+Copyright (c) 2020 ,       Argonne National Laboratory   (Zheming Jin)
+Copyright (c) 2020-,     Oak Ridge National Laboratory   (Zheming Jin)
+All rights reserved.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are met:
+
+1. Redistributions of source code must retain the above copyright notice, this
+   list of conditions and the following disclaimer.
+
+2. Redistributions in binary form must reproduce the above copyright notice,
+   this list of conditions and the following disclaimer in the documentation
+   and/or other materials provided with the distribution.
+
+3. Neither the name of the copyright holder nor the names of its
+   contributors may be used to endorse or promote products derived from
+   this software without specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+```
+
+The per-file copyright headers of the source files consulted at the pinned commit are preserved
+above through the reference `LICENSE`; the files themselves carry no additional per-file license
+notice beyond that reference `LICENSE`.
+
+The HeCBench reference project and its original source:
+
+* HeCBench project: [github.com/ORNL/HeCBench](https://github.com/ORNL/HeCBench)
+* Original sources consulted at commit
+  [`0a17ee47ca6072192101036d4bf292e6612f22e6`](https://github.com/ORNL/HeCBench/tree/0a17ee47ca6072192101036d4bf292e6612f22e6):
+  [`src/popcount-cuda/main.cu`](https://github.com/ORNL/HeCBench/blob/0a17ee47ca6072192101036d4bf292e6612f22e6/src/popcount-cuda/main.cu)
+  and [`src/popcount-omp/main.cpp`](https://github.com/ORNL/HeCBench/blob/0a17ee47ca6072192101036d4bf292e6612f22e6/src/popcount-omp/main.cpp)
+
+This port's own contributions are licensed under the BSD-3-Clause license; see the header of each
+source file.
 
 ## Parameters
 
@@ -52,8 +130,10 @@ samples.
 The host reference and the checker live in `src/helper.hpp`. `popcountReference` is the exact
 Kernighan loop of the HeCBench reference `popcount_ref`. The device output is compared **bit-exact**
 against it; because popcount is an exact integer operation no floating point tolerance applies.
-Every result must also lie in `[0, 64]`, which rejects any corrupt value. The check prints `PASSED`
-or `FAILED` and a failure makes the process return non-zero.
+An explicit range self-validation (`checkRange` in `src/main_alpaka.cpp`) additionally rejects any
+host output outside `[0, 64]` (`[0, 8 * sizeof(uint64_t)]`) before the reference comparison. Both
+checks run on the host after the device output is copied back, never inside the timed kernel. The
+check prints `PASSED` or `FAILED` and a failure makes the process return non-zero.
 
 ## Build and run
 
