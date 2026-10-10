@@ -10,6 +10,7 @@
 #include <bit>
 #include <chrono>
 #include <iostream>
+#include <vector>
 
 namespace haccmkAlpaka
 {
@@ -247,7 +248,11 @@ namespace haccmkAlpaka
         auto vy2_hw = onHost::allocHost<float>(extent);
         auto vz2_hw = onHost::allocHost<float>(extent);
 
-        float fsrrmax2, mp_rsm2, fcoeff, dx1, dy1, dz1, dx2, dy2, dz2;
+        std::vector<double> vx2_ref(n2, 0.0);
+        std::vector<double> vy2_ref(n2, 0.0);
+        std::vector<double> vz2_ref(n2, 0.0);
+
+        float fsrrmax2, mp_rsm2, fcoeff, dx1, dy1, dz1;
         int i = 0;
 
 
@@ -283,15 +288,29 @@ namespace haccmkAlpaka
 
         for(i = 0; i < n1; ++i)
         {
-            hacc::haccmk_gold(n2, xx[i], yy[i], zz[i], fsrrmax2, mp_rsm2, xx, yy, zz, mass, &dx2, &dy2, &dz2);
-            vx2[i] = vx2[i] + dx2 * fcoeff;
-            vy2[i] = vy2[i] + dy2 * fcoeff;
-            vz2[i] = vz2[i] + dz2 * fcoeff;
+            double dx2_ref, dy2_ref, dz2_ref;
+            hacc::haccmk_gold_double(
+                n2,
+                xx[i],
+                yy[i],
+                zz[i],
+                fsrrmax2,
+                mp_rsm2,
+                xx,
+                yy,
+                zz,
+                mass,
+                &dx2_ref,
+                &dy2_ref,
+                &dz2_ref);
+            vx2_ref[i] = dx2_ref * fcoeff;
+            vy2_ref[i] = dy2_ref * fcoeff;
+            vz2_ref[i] = dz2_ref * fcoeff;
         }
 
         haccmk(devAcc, exec, repeat, n1, n2, xx, yy, zz, mass, vx2_hw, vy2_hw, vz2_hw, fsrrmax2, mp_rsm2, fcoeff);
 
-        return hacc::verify(n2, vx2, vy2, vz2, vx2_hw, vy2_hw, vz2_hw);
+        return hacc::verifyRelative(n1, vx2_ref, vy2_ref, vz2_ref, vx2_hw, vy2_hw, vz2_hw);
     }
 } // namespace haccmkAlpaka
 
