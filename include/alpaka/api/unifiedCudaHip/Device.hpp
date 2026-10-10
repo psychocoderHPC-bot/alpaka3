@@ -42,9 +42,11 @@ namespace alpaka::onHost
             ~Device()
             {
                 ALPAKA_LOG_FUNCTION(onHost::logger::device);
+                // All alpaka-owned resources (buffers, streams, events) release themselves through their own
+                // destructors, so no explicit device reset is required here. Calling deviceReset() would destroy the
+                // process-wide primary context and force every later device in this process to re-initialize it.
                 ALPAKA_UNIFORM_CUDA_HIP_RT_CHECK(ApiInterface, ApiInterface::setDevice(getNativeHandle()));
                 ALPAKA_UNIFORM_CUDA_HIP_RT_CHECK(ApiInterface, ApiInterface::deviceSynchronize());
-                ALPAKA_UNIFORM_CUDA_HIP_RT_CHECK(ApiInterface, ApiInterface::deviceReset());
             }
 
             Device(Device const&) = delete;
