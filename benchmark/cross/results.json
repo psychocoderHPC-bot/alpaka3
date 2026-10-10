@@ -1,0 +1,165 @@
+{
+  "benchmark": "cross",
+  "hecbench": {
+    "repo": "https://github.com/zjin-lcf/HeCBench",
+    "commit": "0a17ee47ca6072192101036d4bf292e6612f22e6",
+    "source_files": {
+      "cross-cuda/main.cu": "6a5fa81e4b73b8a233cb3613469d7f1413f79bd0",
+      "cross-omp/main.cpp": "b64dc198b2da54e2fb915278691e808cbc4a7b31"
+    },
+    "license": "Apache-2.0 (TensorFlow-derived)"
+  },
+  "alpaka": {
+    "base_commit": "6f13700c390a09df818a255d53e730f1f9d69456",
+    "branch": "benchmark/cross",
+    "commit": "6f99a1de6642ac3111c3c9e18b350c47262f64fb"
+  },
+  "tolerance": {
+    "fp32": "atol 1e-3 (HeCBench) + rtol 1e-4",
+    "fp64": "atol 1e-9",
+    "measured_max_abs_error_fp32_vs_double": "4.75e-7 over 1e6 rows, well inside atol"
+  },
+  "reference_caveats": [
+    "CPU ratios are indicative, not like-for-like: the HeCBench OpenMP reference is an offload program (num_threads(256)) that oversubscribes 14 cores when run host-side.",
+    "CUDA reference segfaults at 100M in the FP64 pass (it mallocs five host buffers of 2.4 GB without checking); 50M is used as the largest measured configuration",
+    "Meager rows: alpaka uses a single portable kernel for both FP32 and FP64; the CUDA reference has two separate kernels (cross1, cross3). The table shows ratios vs both reference kernels where available."
+  ],
+  "environment": {
+    "cpu": "local 14-core x86_64, GCC 13.3.0, -O3, alpaka backend CpuOmpBlocks, OMP_NUM_THREADS=14",
+    "gpu": "rosi_v100: NVIDIA Tesla V100-SXM2-32GB, sm_70, CUDA 12.6, g++ 13.2, alpaka backend GpuCuda"
+  },
+  "sampling": "one discarded warmup, then 5 measured iterations; reported value is the median. Variation across the 5 samples is <1% for every GPU row and <2% for every CPU row (not separately emitted per row here for brevity; see provenance for per-iteration log output persisted under results/cross/*.log).",
+  "results": [
+    {
+      "config": "10M",
+      "data_type": "fp32",
+      "backend": "GpuCuda",
+      "platform": "gpu",
+      "alpaka_median_us": 590.090,
+      "reference_median_us": [557.349, 528.811],
+      "reference": "HeCBench CUDA cross1 / cross3",
+      "ratio_alpaka_over_ref": [1.06, 1.12],
+      "variation_max_pct": 1.0,
+      "validation": "PASS"
+    },
+    {
+      "config": "10M",
+      "data_type": "fp64",
+      "backend": "GpuCuda",
+      "platform": "gpu",
+      "alpaka_median_us": 1222.461,
+      "reference_median_us": [1093.669, 1101.819],
+      "reference": "HeCBench CUDA cross1 / cross3",
+      "ratio_alpaka_over_ref": [1.12, 1.11],
+      "variation_max_pct": 1.0,
+      "validation": "PASS"
+    },
+    {
+      "config": "50M",
+      "data_type": "fp32",
+      "backend": "GpuCuda",
+      "platform": "gpu",
+      "alpaka_median_us": 2776.267,
+      "reference_median_us": [2645.319, 2640.486],
+      "reference": "HeCBench CUDA cross1 / cross3",
+      "ratio_alpaka_over_ref": [1.05, 1.05],
+      "variation_max_pct": 1.0,
+      "validation": "PASS"
+    },
+    {
+      "config": "50M",
+      "data_type": "fp64",
+      "backend": "GpuCuda",
+      "platform": "gpu",
+      "alpaka_median_us": 6160.157,
+      "reference_median_us": [5407.264, 5348.208],
+      "reference": "HeCBench CUDA cross1 / cross3",
+      "ratio_alpaka_over_ref": [1.14, 1.15],
+      "variation_max_pct": 1.0,
+      "validation": "PASS"
+    },
+    {
+      "config": "100M",
+      "data_type": "fp32",
+      "backend": "GpuCuda",
+      "platform": "gpu",
+      "alpaka_median_us": null,
+      "reference_median_us": null,
+      "reference": "n/a",
+      "ratio_alpaka_over_ref": null,
+      "variation_max_pct": null,
+      "validation": "PASS (correctness only, per problem-size run)"
+    },
+    {
+      "config": "100M",
+      "data_type": "fp64",
+      "backend": "GpuCuda",
+      "platform": "gpu",
+      "alpaka_median_us": null,
+      "reference_median_us": null,
+      "reference": "n/a (CUDA ref segfault)",
+      "ratio_alpaka_over_ref": null,
+      "variation_max_pct": null,
+      "validation": "PASS (correctness only, per problem-size run)"
+    },
+    {
+      "config": "10M",
+      "data_type": "fp32",
+      "backend": "CpuOmpBlocks",
+      "platform": "cpu",
+      "alpaka_median_us": 7587.236,
+      "reference_median_us": [28532.855, 24478.291],
+      "reference": "HeCBench OMP cross1 / cross3",
+      "ratio_alpaka_over_ref": [0.27, 0.31],
+      "variation_max_pct": 2.0,
+      "validation": "PASS"
+    },
+    {
+      "config": "10M",
+      "data_type": "fp64",
+      "backend": "CpuOmpBlocks",
+      "platform": "cpu",
+      "alpaka_median_us": 18079.875,
+      "reference_median_us": [33043.395, 36937.375],
+      "reference": "HeCBench OMP cross1 / cross3",
+      "ratio_alpaka_over_ref": [0.55, 0.49],
+      "variation_max_pct": 2.0,
+      "validation": "PASS"
+    },
+    {
+      "config": "50M",
+      "data_type": "fp32",
+      "backend": "CpuOmpBlocks",
+      "platform": "cpu",
+      "alpaka_median_us": 55095.066,
+      "reference_median_us": [61579.855, 59908.250],
+      "reference": "HeCBench OMP cross1 / cross3",
+      "ratio_alpaka_over_ref": [0.89, 0.92],
+      "variation_max_pct": 2.0,
+      "validation": "PASS"
+    },
+    {
+      "config": "50M",
+      "data_type": "fp64",
+      "backend": "CpuOmpBlocks",
+      "platform": "cpu",
+      "alpaka_median_us": 143037.531,
+      "reference_median_us": [94768.508, 93516.672],
+      "reference": "HeCBench OMP cross1 / cross3",
+      "ratio_alpaka_over_ref": [1.51, 1.53],
+      "variation_max_pct": 2.0,
+      "validation": "PASS"
+    }
+  ],
+  "repro_commands": {
+    "cpu_configure": "cmake --preset rel-host-cpu-gcc -Dalpaka_COMPILE_PEDANTIC=ON -Dalpaka_TESTS=OFF -Dalpaka_EXAMPLES=OFF -Dalpaka_DOCS=OFF .",
+    "cpu_build": "cmake --build build/rel-host-cpu-gcc --target cross_alpaka -j",
+    "cpu_run": "./build/rel-host-cpu-gcc/benchmark/cross/cross_alpaka --size 10000000 --repeat 5 --dtype both",
+    "cta_test": "ctest --test-dir build/rel-host-cpu-gcc -R cross_alpaka",
+    "gpu_configure": "export PATH=/usr/local/cuda-12.6/bin:$PATH; export CUDA_HOME=/usr/local/cuda-12.6; cmake --preset rel-cuda-nvcc-gcc -DCMAKE_CUDA_ARCHITECTURES=70 -Dalpaka_COMPILE_PEDANTIC=ON -Dalpaka_TESTS=OFF -Dalpaka_EXAMPLES=OFF -Dalpaka_DOCS=OFF .",
+    "gpu_build": "cmake --build build/rel-cuda-nvcc-gcc --target cross_alpaka -j",
+    "gpu_run": "./build/rel-cuda-nvcc-gcc/benchmark/cross/cross_alpaka --size 10000000 --repeat 5 --dtype both",
+    "reference_cuda": "cd HeCBench/src/cross-cuda && nvcc -std=c++17 -Xcompiler -Wall -arch=sm_70 -O3 main.cu -o cross_cuda_ref && ./cross_cuda_ref 10000000 5",
+    "reference_omp": "cd HeCBench/src/cross-omp && g++ -O2 -fopenmp -std=c++17 main.cpp -o cross_omp_ref && OMP_NUM_THREADS=14 ./cross_omp_ref 10000000 5"
+  }
+}
