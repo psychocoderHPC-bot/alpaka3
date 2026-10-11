@@ -6,16 +6,20 @@ there is no native CUDA/HIP/OpenMP kernel and no backend branch.
 
 ## What it computes
 
-For `length` output elements and input `a[i] = i`:
+For `length` output elements and a padded input `a` with `length + RADIUS` elements:
 
 ```
 out[i] = sum_{k=-RADIUS}^{RADIUS} a[i+k]     with RADIUS = 7
 ```
 
-Positions before the domain are zero. Positions in `[length, length + RADIUS)` continue the padded
-sequence; positions at or beyond `length + RADIUS` are zero. Each thread block stages a
-`BLOCK_SIZE + 2*RADIUS` window (`BLOCK_SIZE = 256`) in shared memory and fills the left and right
-halo, then sums 15 neighbours per element.
+Positions before the domain and at or beyond the padded buffer `[0, length + RADIUS)` are zero.
+Each thread block stages a `BLOCK_SIZE + 2*RADIUS` window (`BLOCK_SIZE = 256`) in shared memory and
+fills the left and right halo, then sums 15 neighbours per element.
+
+The input values are a deterministic pseudo-random pattern (`makeInput`), not the monotone ramp
+`a[i] = i` used by the upstream harness. The ramp is avoided on purpose: for a symmetric sliding sum
+a duplicated or shifted halo reproduces the same sum of consecutive integers, so a ramp can hide an
+aliasing index error. The pseudo-random pattern is not shift invariant.
 
 ## Provenance
 
@@ -73,9 +77,11 @@ indices `[0, RADIUS)` are the left halo, `[RADIUS, RADIUS + tileSize)` the centr
 
 - left halo `temp[localId] = in[blockStart + localId - RADIUS]`, zero when the index is before the
   domain (block 0 only);
-- right halo `temp[localId + RADIUS + tileSize] = in[blockStart + RADIUS + tileSize + localId]`, zero
+- right halo `temp[localId + RADIUS + tileSize] = in[blockStart + localId + tileSize]`, zero
   when the index reaches the padded input end;
 - centre `temp[localId + RADIUS] = in[blockStart + localId]`, zero past the padded input.
+
+The right-halo destination is `RADIUS + tileSize + localId`, never the centre `RADIUS + localId`.
 
 Every one of the 270 entries is written, so no entry is ever uninitialised.
 
@@ -85,18 +91,27 @@ Every one of the 270 entries is written, so no entry is ever uninitialised.
 the window `[i - RADIUS, i + RADIUS]` by reading the original padded input array element by element,
 not by reusing the shared-memory window or its indexing, and not from the generation rule `a[i] = i`.
 A wrong halo load or wrong boundary handling therefore cannot pass; it would have to reproduce the
-correct value computed from the input independently. The oracle sanity was checked against a
-deliberately broken halo scheme: the broken output fails at the first block boundary (index 249) and
-the correct output passes.
+correct value computed from the input independently.
+
+Two guards back this up.
+
+- The default input is non-trivial (see above). A ramp would let an aliasing error pass; the
+  pseudo-random pattern does not.
+- `oracleSanityCheck()` runs before every verification. It builds the correct output and a
+  deliberately broken output (the right-halo threads writing into the centre region instead of the
+  right halo) from the *same* input, and requires the comparison to accept the first and reject the
+  second. A comparison that had lost the power to detect an index error would fail this check and the
+  program exits nonzero.
 
 Because the arithmetic is integer addition, the reference is exact, so `verify()` compares bit-exactly
 (tolerance 0). The tolerance is not widened; a mismatch is a real bug. `verify()` rejects non-finite
 values explicitly (NaN/Inf check).
 
-A nonzero exit code signals failure. Validation covers a small fast case and representative sizes,
-including odd/irregular lengths that are not multiples of the tile size (boundary correctness):
-`1, 2, 7, 8, 255, 256, 257, 1024`, plus the default `1 << 20` and larger. Both the CPU and the CUDA
-backend were validated on all of these.
+A nonzero exit code signals failure. Validation covers boundary-critical lengths around the tile and
+radius: `1, 2, RADIUS-1 (=6), RADIUS (=7), RADIUS+1 (=8), 255, 256, 257, 511, 512, 513`,
+`2*BLOCK_SIZE-1/2*BLOCK_SIZE/2*BLOCK_SIZE+1 (=511/512/513)` and `1 << 20`, plus `1 << 20 - 1` and
+`1 << 20 + 1`. Both the CPU (`CpuOmpBlocks` and `CpuSerial`) and the CUDA backend pass all of them,
+and the oracle sanity check passes on each.
 
 ## Timing scope and reference reproduction
 
@@ -117,9 +132,10 @@ requires investigation.
   back to the host and is pathologically slow (about 72 s per 1M launch), so it is not a usable
   performance baseline. CPU correctness is still validated against the double host reference; the
   GPU comparison uses the CUDA reference.
-- On the CUDA backend the alpaka kernel is about 1.18x the native reference at 1M and 16M elements.
-  The reference kernel is `__restrict__`-qualified and compiles to 20 registers / 56 SASS
-  instructions, while the generic alpaka wrapper compiles to 23 registers / 80 SASS instructions
-  (bounds checks, tensor-index mapping, shared-memory declarations). The extra ~20% is generic-layer
-  overhead per tiny kernel, not an algorithmic difference. This is documented as an accepted
-  exception; the runtime ratio is reported honestly in the results.
+- On the CUDA backend the alpaka kernel is about 1.15x the native reference at 1M elements and about
+  1.16x at 16M elements. The reference kernel is `__restrict__`-qualified and compiles to 20 registers
+  (1080 bytes shared memory), while the generic alpaka wrapper compiles to 25 registers (same
+  1080 bytes shared memory): the alpaka launch wrapper adds index mapping and bounds handling.
+  The extra ~15% is generic-layer overhead on a kernel that runs in ~20 µs, not an algorithmic
+  difference. The ratio is measured on a downclocked idle V100 (SM clock ~135-202 MHz of 1530 MHz)
+  and is reported honestly in the results; it stays above the 1.10 acceptance threshold.

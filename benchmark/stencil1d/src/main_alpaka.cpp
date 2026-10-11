@@ -171,11 +171,15 @@ namespace stencil1dAlpaka
         auto hIn = onHost::allocHost<int32_t>(inExtent);
         auto hOut = onHost::allocHost<int32_t>(outExtent);
 
-        // Input generation identical to the HeCBench reference: a[i] = i.
-        for(int i = 0; i < padded; ++i)
-            hIn[i] = i;
+        /* Non-trivial deterministic input. A monotone ramp a[i] = i would hide an aliasing halo bug,
+         * because a shifted or duplicated halo can reproduce the same sum of consecutive integers. */
+        stencil1d::makeInput(padded, hIn);
         for(int i = 0; i < length; ++i)
             hOut[i] = 0;
+
+        // Guard the guard: prove the comparison rejects a deliberately broken halo scheme on this input.
+        if(int const rc = stencil1d::oracleSanityCheck(length, hIn); rc != EXIT_SUCCESS)
+            return rc;
 
         auto dIn = onHost::alloc<int32_t>(device, inExtent);
         auto dOut = onHost::alloc<int32_t>(device, outExtent);
