@@ -1,0 +1,63 @@
+{
+  "benchmark": "laplace3d",
+  "workload_sha": "0a17ee47ca6072192101036d4bf292e6612f22e6",
+  "alpaka_commit": "141eb5eb64ba96d69466122f69125d4c60d3b18d",
+  "base": "6f13700c390a09df818a255d53e730f1f9d69456",
+  "impl": "benchmark/laplace3d (portable alpaka, one seven-point Jacobi kernel)",
+  "cpu_model": "Intel Xeon W-2175 @ 2.50GHz (fwk394, 28 threads)",
+  "gpu_model": "Quadro GV100 32GB (fwk394, CUDA_VISIBLE_DEVICES=1); sm_70",
+  "note_gpu_assignment": "protocol requested CUDA_VISIBLE_DEVICES=2 on rosi_v100; rosi_v100 was unreachable via compute MCP (every exec/session/file call failed while other connected targets worked). Used connected fwk394 (GV100, sm_70, CUDA 12.5) with the only V100-class device (index 1).",
+  "compilers": {
+    "cpu": "g++ 13.2.0, rel-host-cpu-gcc, -Dalpaka_COMPILE_PEDANTIC=ON, OMP_NUM_THREADS=8",
+    "cuda": "nvcc 12.5 (CUDA 12.5.82) sm_70, rel-cuda-nvcc-gcc, -DCMAKE_CUDA_ARCHITECTURES=70 -Dalpaka_COMPILE_PEDANTIC=ON",
+    "ref_cuda": "nvcc -std=c++17 -arch=sm_70 -O3 main.cu",
+    "ref_cpu": "g++ -O2 -fopenmp -std=c++17 -I../laplace3d-cuda main.cpp"
+  },
+  "references": {
+    "cuda": "/home/agent/lap3/laplace3d_cuda_ref (ORNL/HeCBench src/laplace3d-cuda/main.cu @0a17ee4)",
+    "cpu": "/home/agent/lap3/laplace3d_omp_ref (ORNL/HeCBench src/laplace3d-omp/main.cpp @0a17ee4; g++ without GPU offload -> host fallback, its verify is FAIL due to pinned reference's uninitialised h_u1)"
+  },
+  "timing_scope": "wall time of the full niter-launch loop divided by niter (HeCBench reference scope); warmup before measured runs; median of measured runs; per_iteration_us = median_s/iters*1e6",
+  "warmup": true,
+  "reps": 7,
+  "acceptance_metric": "GPU (CUDA) runtime ratio; CPU backend validated for correctness only",
+  "metrics": [
+    {
+      "config": "128x128x128", "backend": "cuda", "validation": "PASS",
+      "alpaka_per_iter_us_samples": [52.4168, 52.3912, 52.4002, 52.4018, 52.3554, 52.3674, 52.3498],
+      "alpaka_median_us": 52.3912, "alpaka_variation_pct": 0.128,
+      "ref_per_iter_us_samples": [127.0, 116.0, 115.0, 106.0, 105.0, 106.0, 105.0],
+      "ref_median_us": 106.0, "ratio": 0.494
+    },
+    {
+      "config": "256x128x128", "backend": "cuda", "validation": "PASS",
+      "alpaka_per_iter_us_samples": [96.5901, 96.5694, 96.5501, 96.5322, 96.5116, 96.5305, 96.5136],
+      "alpaka_median_us": 96.5322, "alpaka_variation_pct": 0.081,
+      "ref_per_iter_us_samples": [120.0, 119.0, 119.0, 123.0, 122.0, 125.0, 127.0],
+      "ref_median_us": 122.0, "ratio": 0.791
+    },
+    {
+      "config": "512x512x512", "backend": "cuda", "validation": "PASS",
+      "alpaka_per_iter_us_samples": [2445.63, 2452.54, 2450.82, 2453.49, 2457.26, 2460.29, 2453.72],
+      "alpaka_median_us": 2453.49, "alpaka_variation_pct": 0.597,
+      "ref_per_iter_us_samples": [3120.0, 3017.0, 3016.0, 3020.0, 3021.0, 3033.0, 3024.0],
+      "ref_median_us": 3021.0, "ratio": 0.812
+    },
+    {
+      "config": "128x128x128", "backend": "cpu-ompblocks", "validation": "PASS",
+      "alpaka_median_s": 0.350137, "alpaka_per_iter_us": 3501.37, "alpaka_variation_pct": 0.499,
+      "ref_median_us": 2937.0,
+      "ref_per_iter_us_samples": [2963.0, 2890.0, 2937.0, 2963.0, 2977.0, 3253.0, 2902.0],
+      "note": "g++ OpenMP reference does not offload (target region runs on host); not a like-for-like CPU baseline. Ratio ~1.19 due to per-cell index decomposition vs collapse(3). CPU accepted for correctness only."
+    }
+  ],
+  "repro": {
+    "cpu_build": "cmake --preset rel-host-cpu-gcc -Dalpaka_COMPILE_PEDANTIC=ON . && cmake --build build/rel-host-cpu-gcc --target laplace3d_alpaka -j",
+    "cuda_build": "cmake --preset rel-cuda-nvcc-gcc -DCMAKE_CUDA_ARCHITECTURES=70 -Dalpaka_COMPILE_PEDANTIC=ON . && cmake --build build/rel-cuda-nvcc-gcc --target laplace3d_alpaka -j",
+    "cpu_run": "OMP_NUM_THREADS=8 ./build/rel-host-cpu-gcc/benchmark/laplace3d/laplace3d_alpaka --nx 128 --ny 128 --nz 128 --iters 100 --repeat 7",
+    "cuda_run": "CUDA_VISIBLE_DEVICES=1 ./build/rel-cuda-nvcc-gcc/benchmark/laplace3d/laplace3d_alpaka --nx 256 --ny 128 --nz 128 --iters 100 --repeat 7",
+    "ref_cuda": "nvcc -std=c++17 -arch=sm_70 -O3 main.cu -o laplace3d_cuda_ref && CUDA_VISIBLE_DEVICES=1 ./laplace3d_cuda_ref 256 128 128 100 0",
+    "ref_cpu": "g++ -O2 -fopenmp -std=c++17 -I../laplace3d-cuda main.cpp -o laplace3d_omp_ref && OMP_NUM_THREADS=8 ./laplace3d_omp_ref 128 128 128 100 0",
+    "validation": "bash validate.sh  # 140 dims x iters configs per backend, MATRIX_FAIL=0"
+  }
+}
