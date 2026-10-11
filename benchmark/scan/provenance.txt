@@ -1,0 +1,34 @@
+benchmark,scan
+protocol_run,hecbench-alpaka3-2026-10-10
+workdir,/tmp/alpaka3-scan-impl
+rosi_workdir,n/a (rosi_v100 unreachable during run)
+measure_host,/tmp/scan-build/alpaka3 (fwk394)
+
+hecbench:
+  repo,https://github.com/ORNL/HeCBench
+  sha,0a17ee47ca6072192101036d4bf292e6612f22e6
+  cuda_reference,src/scan-cuda/main.cu
+  cuda_reference_blob,8fa99545998fea82c6d3c85ac9b51636d837b988
+  omp_reference,src/scan-omp/main.cpp
+  omp_reference_blob,864acde3c4cefaa0fe92ec302b6fb807fd5aba50
+  readme_entry,"line 1530, scan (cuda): Scan with bank-conflict-aware optimization"
+
+machine:
+  cpu,Intel Xeon W-2175 (14 cores / 28 threads)
+  gpu,Quadro GV100 32GB (CUDA_VISIBLE_DEVICES=1) - fallback; rosi_v100 V100 was unreachable
+  cuda,12.5
+  gcc,13.2.0
+  cmake,3.28.3
+  nvcc_arch,sm_70
+
+reference_build:
+  cuda,nvcc -std=c++17 -Xcompiler -Wall -arch=sm_70 -O3 main.cu -o scan_cuda_ref
+  omp,g++ -O2 -fopenmp -std=c++17 main.cpp -o scan_omp_ref
+
+build:
+  cpu,cmake --preset rel-host-cpu-gcc -Dalpaka_COMPILE_PEDANTIC=ON
+  gpu,cmake --preset rel-cuda-nvcc-gcc -DCMAKE_CUDA_ARCHITECTURES=70 -Dalpaka_COMPILE_PEDANTIC=ON
+
+timing_scope,repeat back-to-back scans between synchronisations divided by repeat; 1 warm-up scan; 5 independent samples; median reported
+acceptance_metric,median alpaka / median reference (scan_cuda_ref average over repeat=10)
+reference_provenance,scan_cuda_ref prints variant-for-variant averages; ratio compared variant-for-variant
