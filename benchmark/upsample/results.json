@@ -1,0 +1,170 @@
+{
+  "benchmark": "upsample",
+  "workload": "2x nearest-neighbour upsample: forward replication + backward 2x2 sum",
+  "mode": [
+    "forward",
+    "backward"
+  ],
+  "precision": "fp32 (single)",
+  "validation": "per-tile relative-L2 vs independent fp32 host reference (pinned by fp64 oracle); PASS",
+  "reference_provenance": "ORNL/HeCBench 0a17ee47ca6072192101036d4bf292e6612f22e6 src/upsample-cuda/{main.cu,reference.h,common.h} + src/upsample-omp/main.cpp",
+  "impl_commit": "benchmark/upsample local topic branch (SHA in handover)",
+  "base_sha": "6f13700c390a09df818a255d53e730f1f9d69456",
+  "cpu_model": "Intel(R) Xeon(R) W-2175 CPU @ 2.50GHz, 14 cores / 28 threads",
+  "gpu_model": "NVIDIA Quadro GV100 (Volta, sm_70), CUDA 12.5; host fwk394",
+  "rosi_v100": "UNREACHABLE (computeMCP connection failure, B-ROSI)",
+  "compilers": {
+    "cpu": "g++ 13.3, -O3, -fopenmp, -march native, alpaka_COMPILE_PEDANTIC=ON",
+    "cuda": "nvcc 12.5 (V12.5.82), sm_70, -O3, alpaka_COMPILE_PEDANTIC=ON",
+    "cpu_reference": "g++ 13.3 -O3 -fopenmp (pinned reference.h host loops)",
+    "cuda_reference": "nvcc 12.5 -std=c++17 -arch=sm_70 -O3"
+  },
+  "threads_affinity": "OMP_NUM_THREADS=28 OMP_PROC_BIND=true (CPU); CUDA_VISIBLE_DEVICES=1 (GV100)",
+  "timing_scope": "per-pass end-to-end over repeat launches on a non-blocking queue; median of samples; reference uses its benchmark_kernel scope (block_size 256 forward/backward)",
+  "warmup": 1,
+  "reps": 5,
+  "samples": 7,
+  "cpu": [
+    {
+      "size": "B=32 C=64 H=64 W=64",
+      "backend": "Host/CpuOmpBlocks",
+      "forward": {
+        "median_us": 5637.46,
+        "min_us": 5415.45,
+        "max_us": 5700.15,
+        "relspread": 0.0513
+      },
+      "backward": {
+        "median_us": 6201.81,
+        "min_us": 6052.3,
+        "max_us": 6318.62,
+        "relspread": 0.0421
+      },
+      "reference": {
+        "forward_ms": 4.04,
+        "backward_ms": 2.64,
+        "provenance": "upsample_cpu_ref, interleaved median of 5"
+      },
+      "ratio_forward": 1.4,
+      "ratio_backward": 2.35,
+      "validation": "PASS (rel-L2 = 0.0 both passes)",
+      "note": "CPU performance exception >1.10: per-element integer division in the portable flat kernel vs the reference's nested loop counters; see README."
+    }
+  ],
+  "gpu": [
+    {
+      "size": "B=32 C=64 H=64 W=64",
+      "backend": "Cuda/GpuCuda",
+      "forward": {
+        "median_us": 324.278,
+        "min_us": 324.1219,
+        "max_us": 329.4364,
+        "relspread": 0.0164
+      },
+      "backward": {
+        "median_us": 295.9958,
+        "min_us": 295.4272,
+        "max_us": 296.1812,
+        "relspread": 0.0025
+      },
+      "reference": {
+        "forward_ms": 0.3258,
+        "backward_ms": 0.2964,
+        "provenance": "upsample_cuda_ref block_size 256"
+      },
+      "ratio_forward": 0.993,
+      "ratio_backward": 0.999,
+      "validation": "PASS (rel-L2 = 0.0 both passes)"
+    },
+    {
+      "size": "B=8 C=16 H=128 W=128",
+      "backend": "Cuda/GpuCuda",
+      "forward": {
+        "median_us": 83.2746,
+        "min_us": 83.2557,
+        "max_us": 83.4372,
+        "relspread": 0.0022
+      },
+      "backward": {
+        "median_us": 75.7166,
+        "min_us": 75.7035,
+        "max_us": 75.8255,
+        "relspread": 0.0016
+      },
+      "reference": {
+        "forward_ms": 0.0836,
+        "backward_ms": 0.0762,
+        "provenance": "upsample_cuda_ref block_size 256"
+      },
+      "ratio_forward": 0.997,
+      "ratio_backward": 0.995,
+      "validation": "PASS (rel-L2 = 0.0 both passes)"
+    },
+    {
+      "size": "B=3 C=5 H=33 W=31 (odd)",
+      "backend": "Cuda/GpuCuda",
+      "forward": {
+        "median_us": 1.8133,
+        "min_us": 1.8047,
+        "max_us": 2.0005,
+        "relspread": 0.1079
+      },
+      "backward": {
+        "median_us": 1.9046,
+        "min_us": 1.8869,
+        "max_us": 1.9119,
+        "relspread": 0.0131
+      },
+      "reference": {
+        "forward_ms": 0.0022,
+        "backward_ms": 0.0022,
+        "provenance": "upsample_cuda_ref block_size 256"
+      },
+      "validation": "PASS (rel-L2 = 0.0 both passes)"
+    },
+    {
+      "size": "B=2 C=3 H=5 W=7 (odd)",
+      "backend": "Cuda/GpuCuda",
+      "forward": {
+        "median_us": 1.7852,
+        "min_us": 1.7331,
+        "max_us": 2.0961,
+        "relspread": 0.2033
+      },
+      "backward": {
+        "median_us": 1.7923,
+        "min_us": 1.7197,
+        "max_us": 1.9706,
+        "relspread": 0.14
+      },
+      "validation": "PASS (rel-L2 = 0.0 both passes)"
+    },
+    {
+      "size": "B=1 C=1 H=1 W=1 (boundary)",
+      "backend": "Cuda/GpuCuda",
+      "forward": {
+        "median_us": 1.7514,
+        "min_us": 1.7386,
+        "max_us": 1.8156,
+        "relspread": 0.0439
+      },
+      "backward": {
+        "median_us": 1.7621,
+        "min_us": 1.7486,
+        "max_us": 1.7746,
+        "relspread": 0.0147
+      },
+      "validation": "PASS (rel-L2 = 0.0 both passes)"
+    }
+  ],
+  "repro": {
+    "cpu_build": "cmake --preset rel-host-cpu-gcc -Dalpaka_COMPILE_PEDANTIC=ON && cmake --build build/rel-host-cpu-gcc --target upsample_alpaka -j",
+    "cuda_build": "cmake --preset rel-cuda-nvcc-gcc -Dalpaka_COMPILE_PEDANTIC=ON -DCMAKE_CUDA_ARCHITECTURES=70 && cmake --build build/rel-cuda-nvcc-gcc --target upsample_alpaka -j",
+    "cpu_run": "OMP_NUM_THREADS=28 OMP_PROC_BIND=true ./upsample_alpaka --batch 32 --channels 64 --height 64 --width 64 --repeat 100 --samples 5",
+    "cuda_run": "CUDA_VISIBLE_DEVICES=1 ./upsample_alpaka --batch 32 --channels 64 --height 64 --width 64 --repeat 100 --samples 7",
+    "cuda_ref_build": "nvcc -std=c++17 -Xcompiler -Wall -arch=sm_70 -O3 main.cu -o upsample_cuda_ref",
+    "cpu_ref_build": "g++ -O3 -fopenmp -std=c++17 -I. cpu_ref.cpp -o upsample_cpu_ref",
+    "cpu_ref_run": "OMP_NUM_THREADS=28 ./upsample_cpu_ref 32 64 64 64 100",
+    "cuda_ref_run": "CUDA_VISIBLE_DEVICES=1 ./upsample_cuda_ref 32 64 64 64 100"
+  }
+}
