@@ -1,0 +1,91 @@
+{
+  "benchmark": "popcount",
+  "protocol_run": "hecbench-alpaka3-2026-10-10",
+  "hecbench": {
+    "repo": "https://github.com/ORNL/HeCBench",
+    "sha": "0a17ee47ca6072192101036d4bf292e6612f22e6",
+    "cuda_source": "src/popcount-cuda/main.cu",
+    "omp_source": "src/popcount-omp/main.cpp",
+    "implemented_variant": "pc6 (std::popcount / __popcll)"
+  },
+  "machine": {
+    "cpu": "Intel Xeon Gold 6136 (2 sockets x 12 cores, NUMA; 48 HT)",
+    "gpu": "Tesla V100-SXM2-32GB (CUDA_VISIBLE_DEVICES=0)",
+    "cuda": "12.6",
+    "gcc": "13.2",
+    "cmake": "3.28.3"
+  },
+  "build": {
+    "cpu": "cmake --preset rel-host-cpu-gcc -Dalpaka_COMPILE_PEDANTIC=ON",
+    "gpu": "cmake --preset rel-cuda-nvcc-gcc -DCMAKE_CUDA_ARCHITECTURES=70 -Dalpaka_COMPILE_PEDANTIC=ON"
+  },
+  "validation": {
+    "tolerance": "exact (bit-exact integer)",
+    "rationale": "popcount is an exact integer operation in [0,64]; compared bit-exact against the Kernighan host reference plus an explicit [0,64] range guard. No floating tolerance is used.",
+    "nonzero_exit_on_failure": true,
+    "cases": [
+      4096,
+      16777216,
+      67108864
+    ]
+  },
+  "results": [
+    {
+      "config": "16777216",
+      "backend": "GpuCuda",
+      "reference_variant": "pc6",
+      "alpaka_median_us": 270.262,
+      "ref_median_us": 261.218,
+      "ratio": 1.034,
+      "ref_fastest_variant": "pc3",
+      "ref_fastest_us": 256.585,
+      "ratio_vs_fastest": 1.053,
+      "validation": "PASSED"
+    },
+    {
+      "config": "67108864",
+      "backend": "GpuCuda",
+      "reference_variant": "pc6",
+      "alpaka_median_us": 1042.164,
+      "ref_median_us": 1026.761,
+      "ratio": 1.015,
+      "ref_fastest_variant": "pc3",
+      "ref_fastest_us": 1007.102,
+      "ratio_vs_fastest": 1.035,
+      "validation": "PASSED"
+    },
+    {
+      "config": "16777216",
+      "backend": "CpuOmpBlocks",
+      "alpaka_median_us": 1865.876,
+      "ref_pc6_us": 38718.293,
+      "ratio": 0.048,
+      "validation": "PASSED",
+      "note": "reference is an OpenMP-offload program; host fallback is noisy and not like-for-like"
+    },
+    {
+      "config": "67108864",
+      "backend": "CpuOmpBlocks",
+      "alpaka_median_us": 7760.875,
+      "ref_pc6_us": 14522.516,
+      "ratio": 0.534,
+      "validation": "PASSED"
+    },
+    {
+      "config": "67108864",
+      "backend": "CpuSerial",
+      "alpaka_median_us": 154702.266,
+      "validation": "PASSED"
+    }
+  ],
+  "ctest": {
+    "cpu": "PASSED",
+    "gpu": "PASSED"
+  },
+  "notes": [
+    "timing scope: kernel enqueue + device synchronisation; host/device copies, allocation and verification excluded; 1 warm-up discarded, median of >=5 measured",
+    "reference is the HeCBench CUDA pc6 variant; pc3 (fastest reference variant) is reported for context",
+    "the OpenMP reference is written for target offload; without a device the pragmas run on the host and the ratio is indicative, not like-for-like"
+  ],
+  "commit_sha": "811571a9258df2faf77e8fef02c646a6dfcad551"
+}
