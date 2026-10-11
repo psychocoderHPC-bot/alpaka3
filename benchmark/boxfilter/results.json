@@ -1,0 +1,122 @@
+{
+  "benchmark": "boxfilter",
+  "protocol_run": "hecbench-alpaka3-2026-10-10",
+  "hecbench": {
+    "repo": "https://github.com/ORNL/HeCBench",
+    "sha": "0a17ee47ca6072192101036d4bf292e6612f22e6",
+    "source_files": {
+      "boxfilter-cuda/main.cu": "ae1b370fbf9f704527072a5eb4ebed8a80232a1f",
+      "boxfilter-omp/main.cpp": "c3809848f97a8c9ca8b99463c7acf19d5973e774",
+      "boxfilter-sycl/reference.cpp": "d90b296f0d032d6a245f9a7e8ed2b070d4fb0e58",
+      "boxfilter-sycl/shrUtils.cpp": "4d11068676eccda6a844932c0e11eecce0db4cef",
+      "boxfilter-sycl/shrUtils.h": "43ffd7761eb6c3d838e8cd66679676e2a13b9e93"
+    },
+    "license": "BSD-3-Clause (NVIDIA 1993-2010 header; upstream HeCBench BSD-3-Clause)"
+  },
+  "alpaka": {
+    "base_commit": "6f13700c390a09df818a255d53e730f1f9d69456",
+    "branch": "benchmark/boxfilter",
+    "commit": "46737aa97bf0438b6f65422106fbdbf22b1df07e"
+  },
+  "reference_build": {
+    "cuda": "nvcc -std=c++17 -Xcompiler -Wall -arch=sm_70 -O3 -I. -I../boxfilter-sycl main.cu ../boxfilter-sycl/shrUtils.cpp ../boxfilter-sycl/reference.cpp ../boxfilter-sycl/cmd_arg_reader.cpp -o boxfilter_cuda_ref",
+    "omp": "g++ -O2 -fopenmp -std=c++17 -Wall -I../boxfilter-sycl main.cpp ../boxfilter-sycl/shrUtils.cpp ../boxfilter-sycl/reference.cpp ../boxfilter-sycl/cmd_arg_reader.cpp -o boxfilter_omp_ref"
+  },
+  "machine": {
+    "host": "rosi_v100",
+    "cpu": "Intel(R) Xeon(R) Gold 6136 CPU @ 3.00GHz (2 sockets x 12 cores, 2 NUMA nodes, 48 HT), 300 GB",
+    "gpu": "Tesla V100-SXM2-32GB (CUDA_VISIBLE_DEVICES=0)",
+    "cuda": "12.6 (nvcc V12.6.85)",
+    "gcc": "13.2.0",
+    "cmake": "3.28.3"
+  },
+  "build": {
+    "cpu": "cmake --preset rel-host-cpu-gcc -Dalpaka_COMPILE_PEDANTIC=ON",
+    "gpu": "cmake --preset rel-cuda-nvcc-gcc -DCMAKE_CUDA_ARCHITECTURES=70 -Dalpaka_COMPILE_PEDANTIC=ON"
+  },
+  "timing_scope": "repeat back-to-back (row_kernel then col_kernel) passes between two synchronisations, divided by repeat; one warm-up pass; median of measured samples",
+  "validation": {
+    "kind": "exact (tolerance 0)",
+    "rationale": "the reference row and column passes truncate exact integer sums (floor(sum/(2r+1))); for radius 10 the single-precision scale 1.0f/21 agrees with exact integer division for every achievable sum 0..255*21, so the integer host reference reproduces the pinned reference bit for bit",
+    "reference": "independent 64-bit integer host oracle recomputed from the same input; cross-checked against the pinned HeCBench BoxFilterHost on lenaRGB.ppm with ROI_DIFF=0 for radii 0,1,3,5,8,10",
+    "roi": "rows [radius, height-radius)",
+    "nonzero_exit_on_failure": true,
+    "nonfinite_checks": true
+  },
+  "results": [
+    {
+      "config": "1024x1024",
+      "backend": "GpuCuda",
+      "radius": 10,
+      "repeat": 100,
+      "samples": 5,
+      "alpaka_median_us": 111.4211,
+      "alpaka_variation_pct": 0.18,
+      "ref_median_us": 515.32,
+      "ratio_alpaka_over_ref": 0.216,
+      "validation": "PASS"
+    },
+    {
+      "config": "1920x1080",
+      "backend": "GpuCuda",
+      "radius": 10,
+      "repeat": 100,
+      "samples": 5,
+      "alpaka_median_us": 201.0756,
+      "alpaka_variation_pct": 0.21,
+      "ref_median_us": 618.51,
+      "ratio_alpaka_over_ref": 0.325,
+      "validation": "PASS"
+    },
+    {
+      "config": "4096x4096",
+      "backend": "GpuCuda",
+      "radius": 10,
+      "repeat": 100,
+      "samples": 5,
+      "alpaka_median_us": 1269.9798,
+      "alpaka_variation_pct": 0.31,
+      "ref_median_us": null,
+      "ratio_alpaka_over_ref": null,
+      "validation": "PASS",
+      "note": "exceeds the reference uiMaxImageWidth/Height = 1920/1080 guard, so no reference number"
+    },
+    {
+      "config": "1024x1024",
+      "backend": "CpuOmpBlocks",
+      "threads": 48,
+      "radius": 10,
+      "repeat": 20,
+      "samples": 5,
+      "alpaka_median_us": 2799.3300,
+      "alpaka_variation_pct": 5.92,
+      "ref_median_us": null,
+      "ratio_alpaka_over_ref": null,
+      "validation": "PASS",
+      "note": "OpenMP reference is a target-offload program; g++ host fallback is not a usable CPU baseline (same as the histogram precedent)"
+    },
+    {
+      "config": "1920x1080",
+      "backend": "CpuOmpBlocks",
+      "threads": 48,
+      "radius": 10,
+      "repeat": 20,
+      "samples": 5,
+      "alpaka_median_us": 5008.3203,
+      "alpaka_variation_pct": 4.49,
+      "ref_median_us": null,
+      "ratio_alpaka_over_ref": null,
+      "validation": "PASS",
+      "note": "OpenMP reference is a target-offload program; g++ host fallback is not a usable CPU baseline"
+    }
+  ],
+  "repro_commands": {
+    "cpu_build": "cmake --preset rel-host-cpu-gcc -Dalpaka_COMPILE_PEDANTIC=ON . && cmake --build build/rel-host-cpu-gcc --target boxfilter_alpaka -j",
+    "cpu_run": "OMP_NUM_THREADS=48 ./build/rel-host-cpu-gcc/benchmark/boxfilter/boxfilter_alpaka --width 1024 --height 1024 --radius 10 --repeat 20 --samples 5",
+    "gpu_build": "PATH=/usr/local/cuda-12.6/bin:$PATH CUDA_HOME=/usr/local/cuda-12.6 cmake --preset rel-cuda-nvcc-gcc -DCMAKE_CUDA_ARCHITECTURES=70 -Dalpaka_COMPILE_PEDANTIC=ON . && cmake --build build/rel-cuda-nvcc-gcc --target boxfilter_alpaka -j",
+    "gpu_run": "CUDA_VISIBLE_DEVICES=0 ./build/rel-cuda-nvcc-gcc/benchmark/boxfilter/boxfilter_alpaka --width 1920 --height 1080 --radius 10 --repeat 100 --samples 5",
+    "ctest": "ctest --test-dir build/rel-host-cpu-gcc -R boxfilter_alpaka --output-on-failure",
+    "reference_cuda": "cd /root/boxfilter-work/ref/boxfilter-cuda && ./boxfilter_cuda_ref ../../boxfilter-sycl/lenaRGB.ppm 100"
+  },
+  "raw_evidence": "/tmp/alpaka-orchestration/hecbench-alpaka3-2026-10-10/evidence/boxfilter/ (measurement.txt, crosscheck-vs-hecbench.txt, cpu-validation.txt, gpu-validation.txt)"
+}
