@@ -1,0 +1,186 @@
+{
+  "benchmark": "dct8x8",
+  "workload_sha": "0a17ee47ca6072192101036d4bf292e6612f22e6",
+  "alpaka_commit": "dbb52dd97279e9ad7984cb2baff9d229ae3368b6",
+  "base": "6f13700c390a09df818a255d53e730f1f9d69456",
+  "impl": "benchmark/dct8x8 (portable alpaka; one work item per full 8x8 block, separable orthonormal DCT-II / inverse DCT-III)",
+  "cpu_model": "Intel Xeon W-2175 (fwk394, 28 threads)",
+  "gpu_model": "Quadro GV100 32GB (fwk394, CUDA_VISIBLE_DEVICES=1); sm_70",
+  "note_gpu_assignment": "protocol requested rosi_v100 (Tesla V100), CUDA_VISIBLE_DEVICES=3; rosi_v100 was unreachable via compute MCP for the whole run. Used connected fwk394 (Quadro GV100, sm_70, CUDA 12.5) with GPU index 1.",
+  "compilers": {
+    "cpu": "g++ 13.2.0, rel-host-cpu-gcc, -Dalpaka_COMPILE_PEDANTIC=ON, OMP_NUM_THREADS=14",
+    "cuda": "nvcc 12.5 sm_70, rel-cuda-nvcc-gcc, -DCMAKE_CUDA_ARCHITECTURES=70 -Dalpaka_COMPILE_PEDANTIC=ON",
+    "ref_cuda": "nvcc -std=c++17 -Xcompiler -Wall -arch=sm_70 -O3 main.cu kernels.cu DCT8x8_gold.cu",
+    "ref_cpu": "g++ -O2 -fopenmp -std=c++17 main.cpp kernels.cpp DCT8x8_gold.cpp"
+  },
+  "reference": {
+    "repo": "https://github.com/ORNL/HeCBench",
+    "sha": "0a17ee47ca6072192101036d4bf292e6612f22e6",
+    "cuda_sources": {
+      "src/dct8x8-cuda/main.cu": "f3686f55a784678c029399bb975ac16fe44c56c0",
+      "src/dct8x8-cuda/kernels.cu": "3b9607e718eb3a2faf682f59ad25d3b6ff47654a",
+      "src/dct8x8-cuda/DCT8x8_gold.cu": "5909bcd4eaae4063c77590fd63c6e3b15f496dcb",
+      "src/dct8x8-cuda/DCT8x8.h": "434d2862f5026a118684bdd22f24b80724d260d2"
+    },
+    "omp_sources": {
+      "src/dct8x8-omp/main.cpp": "7b1035924130e78849882ba8caec546f7a7b95e6",
+      "src/dct8x8-omp/kernels.cpp": "6a2b95fa659303444ee098461819b12506a74a35",
+      "src/dct8x8-omp/DCT8x8_gold.cpp": "5909bcd4eaae4063c77590fd63c6e3b15f496dcb",
+      "src/dct8x8-omp/DCT8x8.h": "434d2862f5026a118684bdd22f24b80724d260d2"
+    },
+    "algorithm": "NVIDIA CUDA SDK dct8x8 sample; AAN 8-point fast DCT (H.264-style separable 8x8 transform). NVIDIA SDK EULA header; HeCBench repo is MIT (ORNL). Reference not vendored.",
+    "omp_usable_as_baseline": false,
+    "omp_note": "omp target teams offload program for icpx; built with g++ -fopenmp the offload pragmas are ignored and the teams loop runs on the host, so it is a functional CPU check only"
+  },
+  "timing_scope": "per-transform end-to-end on the queue: one sample runs repeat transforms, reported value is total/repeat; median of samples after one warm-up",
+  "warmup": 1,
+  "reps_gpu": 7,
+  "acceptance_metric": "GPU (CUDA) runtime ratio, median alpaka / median reference",
+  "metrics": [
+    {
+      "mode": "gpu",
+      "size": "8192x8192",
+      "dir": "forward",
+      "backend": "cuda",
+      "validation": "PASS",
+      "alpaka_median_us": 1523.5575,
+      "ref_median_us": 990.0,
+      "ratio": 1.539,
+      "variation": 0.0873,
+      "raw_samples_us": [
+        1496.4316,
+        1626.8492,
+        1507.5151,
+        1629.4119,
+        1509.693,
+        1620.7425,
+        1523.5575
+      ]
+    },
+    {
+      "mode": "gpu",
+      "size": "8192x8192",
+      "dir": "inverse",
+      "backend": "cuda",
+      "validation": "PASS",
+      "alpaka_median_us": 1488.2597,
+      "ref_median_us": 989.0,
+      "ratio": 1.505,
+      "variation": 0.1582,
+      "raw_samples_us": [
+        1715.2531,
+        1480.7242,
+        1596.3151,
+        1479.8745,
+        1481.1085,
+        1602.5127,
+        1488.2597
+      ]
+    },
+    {
+      "mode": "gpu",
+      "size": "999x777",
+      "dir": "forward",
+      "backend": "cuda",
+      "validation": "PASS",
+      "alpaka_median_us": 29.1092,
+      "ref_median_us": 11.0,
+      "ratio": 2.646,
+      "variation": 0.0384,
+      "raw_samples_us": [
+        30.1937,
+        29.4176,
+        29.0891,
+        29.0975,
+        29.1092,
+        29.0756,
+        29.1286
+      ]
+    },
+    {
+      "mode": "gpu",
+      "size": "999x777",
+      "dir": "inverse",
+      "backend": "cuda",
+      "validation": "PASS",
+      "alpaka_median_us": 31.529,
+      "ref_median_us": 11.0,
+      "ratio": 2.866,
+      "variation": 0.0066,
+      "raw_samples_us": [
+        31.5779,
+        31.6343,
+        31.529,
+        31.62,
+        31.4394,
+        31.4269,
+        31.4666
+      ]
+    },
+    {
+      "mode": "cpu",
+      "size": "999x777",
+      "dir": "forward",
+      "backend": "host",
+      "validation": "PASS",
+      "alpaka_median_us": 533.7235,
+      "ref_median_us": null,
+      "ratio": null,
+      "variation": 0.7297,
+      "note": "no tuned CPU reference (g++ -fopenmp omp reference does not offload); correctness against the double-precision host oracle"
+    },
+    {
+      "mode": "cpu",
+      "size": "8192x8192",
+      "dir": "forward",
+      "backend": "host",
+      "validation": "PASS",
+      "alpaka_median_us": 17608.181,
+      "ref_median_us": null,
+      "ratio": null,
+      "variation": 0.0703,
+      "note": "no tuned CPU reference"
+    }
+  ],
+  "performance_exception": {
+    "applies": true,
+    "summary": "The GPU kernel is slower than the pinned CUDA reference (ratio > 1.10): ~1.5x at 8192x8192 and ~2.6-2.9x at 999x777. The reference is the hand-tuned NVIDIA CUDA SDK kernel: one thread per 8x8 block, shared-memory transpose so both passes are coalesced, 32 registers and 512-thread blocks giving high occupancy.",
+    "port_cost": "The portable register tile costs 216 registers per thread, which caps occupancy.",
+    "attempted_optimizations": [
+      "in-place two-pass variant",
+      "per-block shared-memory variant",
+      "coalesced shared-memory group kernel (32 registers)"
+    ],
+    "outcome": "None matched the reference on the 8192x8192 workload; the transform, scaling, block layout and comparison stay exact."
+  },
+  "validation": {
+    "kind": "relative L2 < 1e-6 against an independent double-precision host oracle, plus explicit NaN/Inf rejection",
+    "rationale": "the reference's own acceptance is relative L2 < 1e-6. The float fast transform versus the double oracle measures 8.2e-8 (8x8) .. 8.8e-8 (8192x8192) forward and 1.3e-7 inverse; the GPU kernel reaches 7.9e-8..9.5e-8, three orders of magnitude below the threshold. The tolerance is not widened.",
+    "sizes": [
+      "8x8",
+      "8x7",
+      "7x9",
+      "9x9",
+      "15x15",
+      "16x16",
+      "20x12",
+      "999x777",
+      "1000x776",
+      "8192x8192"
+    ],
+    "result": "PASS both backends, both directions",
+    "nonzero_exit_on_failure": true
+  },
+  "repro": {
+    "cpu_build": "cmake --preset rel-host-cpu-gcc -Dalpaka_COMPILE_PEDANTIC=ON . && cmake --build build/rel-host-cpu-gcc --target dct8x8_alpaka -j",
+    "cuda_build": "PATH=/usr/local/cuda/bin:$PATH CUDA_HOME=/usr/local/cuda cmake --preset rel-cuda-nvcc-gcc -DCMAKE_CUDA_ARCHITECTURES=70 -Dalpaka_COMPILE_PEDANTIC=ON . && cmake --build build/rel-cuda-nvcc-gcc --target dct8x8_alpaka -j",
+    "cpu_run": "OMP_NUM_THREADS=14 ./build/rel-host-cpu-gcc/benchmark/dct8x8/dct8x8_alpaka --width 999 --height 777 --repeat 20 --samples 3",
+    "cuda_run": "CUDA_VISIBLE_DEVICES=1 ./build/rel-cuda-nvcc-gcc/benchmark/dct8x8/dct8x8_alpaka --width 8192 --height 8192 --repeat 100 --samples 7",
+    "ref_cuda": "nvcc -std=c++17 -Xcompiler -Wall -arch=sm_70 -O3 main.cu kernels.cu DCT8x8_gold.cu -o dct8x8_cuda_ref && CUDA_VISIBLE_DEVICES=1 ./dct8x8_cuda_ref 8192 8192 100",
+    "ref_cpu": "g++ -O2 -fopenmp -std=c++17 main.cpp kernels.cpp DCT8x8_gold.cpp -o dct8x8_omp_ref"
+  },
+  "raw_data": {
+    "gpu_csv": "benchmark/dct8x8/dct8x8-gpu.csv",
+    "provenance": "benchmark/dct8x8/provenance.txt"
+  }
+}
