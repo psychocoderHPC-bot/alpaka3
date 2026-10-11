@@ -100,6 +100,14 @@ Validation covered `3, 5, 7, 9, 15, 16, 17, 31, 33, 64, 65, 100, 128, 129, 257` 
 that are not a multiple of the 16x16 tile and odd sizes), plus the default `N = 2048`, on both the
 CPU and CUDA backends.
 
+Convergence is verified against the pinned references, not only against the host field reference.
+For `N = 2048`, `tol = 1e-5` the port and the HeCBench CUDA and OpenMP references all stop after
+exactly 6072 iterations. The other validated sizes agree with the OpenMP reference iteration for
+iteration as well (`N = 16 -> 124`, `33 -> 444`, `64 -> 1290`, `117 -> 3050`, `511 -> 9599`). The
+port assigns the reduced L2 scalar to the convergence variable (`main_alpaka.cpp`, `runSolve`) and
+applies the reference `sqrt(sum(df^2) / (N*N))` normalisation before the loop test, so the solver
+runs the full iteration sequence rather than exiting early.
+
 ## Timing scope and reference reproduction
 
 The measured metric is the wall time of the whole `while (error > tol && iters < maxIters)` loop,
@@ -119,8 +127,8 @@ requires investigation (see limitations).
   back to the host; CPU correctness is validated against the double host reference, and the GPU
   comparison uses the CUDA reference.
 - On the CUDA backend the alpaka kernel matches or slightly beats the native reference per
-  iteration (about 69 us vs 74 us, ratio about 0.93). The reference specialises an 18x18
-  shared-memory halo tile and a warp-shuffle reduction; the port uses a flat row-major tile with a
-  warp-shuffle reduction plus a single shared step across warps, which keeps the same global-memory
-  access pattern and a comparable reduction cost. The remaining difference is small and in favour
-  of the port.
+  iteration (about 93 us vs 100 us, ratio about 0.94, re-measured on an idle Quadro GV100 sm_70).
+  The reference specialises an 18x18 shared-memory halo tile and a warp-shuffle reduction; the port
+  uses a flat row-major tile with a warp-shuffle reduction plus a single shared step across warps,
+  which keeps the same global-memory access pattern and a comparable reduction cost. The remaining
+  difference is small and in favour of the port.
