@@ -1,0 +1,175 @@
+{
+  "benchmark": "jacobi",
+  "task": "IMPL-jacobi",
+  "hecbench_sha": "0a17ee47ca6072192101036d4bf292e6612f22e6",
+  "alpaka_base_sha": "6f13700c390a09df818a255d53e730f1f9d69456",
+  "commit_sha": "298d33de89cb73a53d891349723a664b9f03fb4d",
+  "algorithm": {
+    "description": "2D five-point Jacobi solver, fixed sinusoidal boundary, interior 0, iterate until sqrt(sum(df^2)/(N*N)) <= tol",
+    "N": 2048,
+    "tolerance": 1e-05,
+    "max_iters": 10000,
+    "observed_iters": 6072,
+    "precision": "float"
+  },
+  "machine": {
+    "gpu": "4x Tesla V100-SXM2-32GB (sm_70), driver 570.158.01",
+    "gpu_used": "CUDA_VISIBLE_DEVICES=2",
+    "cpu": "Intel Xeon Gold 6136 @ 3.00GHz, 48 threads",
+    "compiler": "g++ 13.2, nvcc (CUDA 12.6), cmake 3.28.3"
+  },
+  "timing_scope": "wall time of the full convergence while-loop / iteration count (HeCBench reference scope); warm-up excluded, measured solves independent",
+  "warmup": "1 untimed solve, then >=5 independent measured solves; median reported",
+  "validation": {
+    "host_reference": "independent double-precision five-point solver in src/helper.hpp",
+    "tolerance": 0.0001,
+    "tolerance_rationale": "float solution magnitude <= 1, one float ulp near 1 is 5.96e-8; worst observed residual 7.12e-7 at N=2048; tolerance keeps ~140x margin, not widened to hide bugs",
+    "nan_inf_check": true,
+    "sizes_validated": [
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      15,
+      16,
+      17,
+      31,
+      32,
+      33,
+      63,
+      64,
+      65,
+      100,
+      127,
+      128,
+      129,
+      255,
+      256,
+      257,
+      2048
+    ],
+    "result": "PASS both backends"
+  },
+  "runs": [
+    {
+      "config": "N=2048",
+      "backend": "GpuCuda",
+      "impl": "alpaka (final warp-shuffle reduction)",
+      "median_per_iteration_us": 69.430174,
+      "variation_pct": 0.126845,
+      "reps": 5,
+      "validation": "PASS iters=6072 max_diff=7.123373e-07",
+      "note": "one invocation captured for the final kernel; the same source passed all size validations afterwards"
+    },
+    {
+      "config": "N=2048",
+      "backend": "CudaRef",
+      "impl": "nvcc sm_70 -O3 native reference",
+      "samples_per_iteration_us": [
+        76.481,
+        73.3801,
+        73.9617,
+        74.5878,
+        73.6891,
+        74.3715,
+        74.7167,
+        74.3543,
+        74.5871,
+        74.0223,
+        74.5731,
+        74.359,
+        74.2512,
+        76.8259,
+        74.6758,
+        74.6493,
+        74.3901,
+        74.0804,
+        74.3467,
+        74.2999
+      ],
+      "median_per_iteration_us": 74.3715,
+      "variation_pct": 4.66,
+      "validation": "PASS"
+    },
+    {
+      "config": "N=2048",
+      "backend": "CpuOmpBlocks",
+      "impl": "alpaka (shared-memory tree reduction build; CPU compute path is unchanged by the warp-shuffle commit)",
+      "samples_per_solve_s": [
+        36.8179,
+        36.8232,
+        36.7494,
+        36.7242,
+        36.715
+      ],
+      "median_per_solve_s": 36.749435,
+      "median_per_iteration_us": 6052.278482,
+      "variation_pct": 0.29,
+      "validation": "PASS iters=6072 max_diff=7.123373e-07",
+      "threads": 8
+    }
+  ],
+  "ratios": {
+    "gpu_alpaka_over_cuda_ref": 0.9336,
+    "acceptance": "<=1.00 match"
+  },
+  "repro": {
+    "build_cpu": "cmake --preset rel-host-cpu-gcc -Dalpaka_COMPILE_PEDANTIC=ON . && cmake --build build/rel-host-cpu-gcc --target jacobi_alpaka -j",
+    "build_gpu": "PATH=/usr/local/cuda-12.6/bin:$PATH CUDA_HOME=/usr/local/cuda-12.6 cmake --preset rel-cuda-nvcc-gcc -DCMAKE_CUDA_ARCHITECTURES=70 -Dalpaka_COMPILE_PEDANTIC=ON . && cmake --build build/rel-cuda-nvcc-gcc --target jacobi_alpaka -j",
+    "run_gpu": "CUDA_VISIBLE_DEVICES=2 ./build/rel-cuda-nvcc-gcc/benchmark/jacobi/jacobi_alpaka --n 2048 --repeat 5",
+    "run_cpu": "OMP_NUM_THREADS=8 ./build/rel-host-cpu-gcc/benchmark/jacobi/jacobi_alpaka --n 2048 --repeat 5",
+    "ref_cuda": "export PATH=/usr/local/cuda-12.6/bin:$PATH; cd /home/ubuntu/jacobi-ref-src/jacobi-cuda && nvcc -std=c++17 -arch=sm_70 -O3 main.cu -o jacobi_cuda_ref && CUDA_VISIBLE_DEVICES=2 ./jacobi_cuda_ref"
+  },
+  "reverification": {
+    "task": "FIX-jacobi",
+    "reviewed_sha": "298d33de89cb73a53d891349723a664b9f03fb4d",
+    "verdict": "review incorrect: no functional defect",
+    "evidence": {
+      "symbols": "src/main_alpaka.cpp contains no sum_sq, no algorithm::reduce, and there is no main.cpp; review file:line refs do not exist",
+      "assignment": "runSolve: error = sqrt(h_error[0]/(n*n)); reduction accumulates into d_error via onAcc::atomicAdd",
+      "normalization": "present at the same statement: /n/n inside sqrt"
+    },
+    "iteration_counts_pinned_ref_vs_port": {
+      "N=2048": {
+        "port": 6072,
+        "cuda_ref": 6072,
+        "omp_ref": 6072
+      },
+      "N=16": {
+        "port": 124,
+        "omp_ref": 124
+      },
+      "N=33": {
+        "port": 444,
+        "omp_ref": 444
+      },
+      "N=64": {
+        "port": 1290,
+        "omp_ref": 1290
+      },
+      "N=117": {
+        "port": 3050,
+        "omp_ref": 3050
+      },
+      "N=511": {
+        "port": 9599,
+        "omp_ref": 9599
+      }
+    },
+    "note": "rosi_v100 connected but exec/session failed; GPU measured on fwk394 (Quadro GV100, sm_70). hal (A30) was contended.",
+    "gpu_remeasure": {
+      "host": "fwk394 Quadro GV100 (sm_70, idle)",
+      "alpaka_median_s": 0.565381,
+      "alpaka_reps": 7,
+      "variation_pct": 0.122476,
+      "cuda_ref_median_s": 0.60447,
+      "cuda_ref_reps": 7,
+      "ratio": 0.9353,
+      "validation": "PASS iters=6072"
+    }
+  }
+}
