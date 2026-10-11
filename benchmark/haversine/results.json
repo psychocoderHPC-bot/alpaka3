@@ -1,0 +1,147 @@
+{
+  "benchmark": "haversine",
+  "reference_provenance": {
+    "project": "ORNL/HeCBench",
+    "commit": "0a17ee47ca6072192101036d4bf292e6612f22e6",
+    "cuda_sources": {
+      "src/haversine-cuda/main.cu": "documented below",
+      "src/haversine-cuda/distance.cu": "kernel compute_haversine_distance",
+      "src/haversine-cuda/distance.h": "DEGREE_TO_RADIAN, EARTH_RADIUS_KM, double4"
+    },
+    "omp_source": "src/haversine-omp/main.cpp + distance.cpp",
+    "upstream_license": "Apache-2.0, Copyright (c) 2020, NVIDIA CORPORATION (source header)"
+  },
+  "impl": "alpaka3",
+  "branch": "benchmark/haversine",
+  "base_sha": "6f13700c390a09df818a255d53e730f1f9d69456",
+  "precision": "double",
+  "input_data": {
+    "reference": "src/geodesic-sycl/locations.txt (DVC, md5 03ce97e6d0c09f8be45907295e5d78c4, 42873157 bytes), symlinked by geodesic-cuda/hip/omp",
+    "port_default": "deterministic built-in xorshift64* generator (seed 12345) so the port is self-contained",
+    "port_override": "--input <file> reads the exact HeCBench lat/lon format; used in validation"
+  },
+  "timing_scope": "repeat back-to-back kernel enqueues between two synchronisations / repeat; warmup excluded; host reference and validation outside the timed region",
+  "warmup": 1,
+  "validation_tolerance": "|got-ref| <= 1e-6 km + 1e-9*|ref|; justified: device and double host both evaluate the same double expression, differing only by libm ULP (order 1e-12 km at 1e4 km distances)",
+  "size_matrix_validated": [
+    "1",
+    "2",
+    "3",
+    "5",
+    "31",
+    "32",
+    "33",
+    "255",
+    "256",
+    "257",
+    "1000",
+    "100003"
+  ],
+  "cross_check_reference_binary": {
+    "reference": "pinned src/haversine-cuda compiled with nvcc -std=c++17 -arch=sm_70 -O3 -use_fast_math",
+    "method": "same synthetic 2^21 input file fed to both the pinned reference binary and the alpaka port; device distance arrays compared elementwise",
+    "n": 12582912,
+    "alpaka_vs_refdevice_max_km": 5.915354e-09,
+    "alpaka_vs_refhost_max_km": 5.915354e-09,
+    "refdevice_vs_refhost_max_km": 2.004526e-09
+  },
+  "rows": [
+    {
+      "config": "default 2^21 cities, 6 ref cities",
+      "backend": "Cuda",
+      "executor": "GpuCuda",
+      "gpu": "Quadro GV100 (SM 7.0)",
+      "size": "12582912 pairs",
+      "precision": "double",
+      "flags": "cmake rel-cuda-nvcc-gcc -DCMAKE_CUDA_ARCHITECTURES=70 -Dalpaka_COMPILE_PEDANTIC=ON",
+      "gpu_device": 1,
+      "reps": 7,
+      "raw_samples_us": [
+        9823.724,
+        9383.3497,
+        9383.4239,
+        9383.5966,
+        9383.774,
+        9383.9869,
+        9383.5162
+      ],
+      "median_us": 9383.5966,
+      "variation": 0.0469,
+      "reference_median_us": 11427.0,
+      "ratio": 0.821,
+      "validation": "PASS",
+      "reference_raw_samples_us": [
+        11427.0,
+        11481.0,
+        11542.0,
+        11415.0,
+        11387.0
+      ]
+    },
+    {
+      "config": "default 2^21 cities, 6 ref cities",
+      "backend": "Host",
+      "executor": "CpuOmpBlocks",
+      "cpu": "Intel Xeon W-2175",
+      "size": "12582912 pairs",
+      "precision": "double",
+      "compiler": "g++ 13.2",
+      "flags": "cmake rel-host-cpu-gcc -Dalpaka_COMPILE_PEDANTIC=ON",
+      "threads": 14,
+      "reps": 7,
+      "raw_samples_us": [
+        100013.7226,
+        100042.2416,
+        100067.145,
+        99989.5986,
+        99834.479,
+        99897.6185,
+        99664.9848
+      ],
+      "median_us": 99989.5986,
+      "variation": 0.004,
+      "reference_median_us": 94009.8683,
+      "ratio": 1.064,
+      "validation": "PASS",
+      "reference_raw_samples_us": [
+        93824.9613,
+        102457.9504,
+        94033.7712,
+        94009.8683,
+        93881.5024
+      ]
+    },
+    {
+      "config": "default 2^21 cities, 6 ref cities",
+      "backend": "Host",
+      "executor": "CpuSerial",
+      "cpu": "Intel Xeon W-2175",
+      "size": "12582912 pairs",
+      "precision": "double",
+      "threads": 1,
+      "reps": 7,
+      "raw_samples_us": [
+        989230.0563,
+        986902.3422,
+        1001517.0531,
+        1077216.549,
+        1004400.6067,
+        1010758.2546,
+        1009586.0914
+      ],
+      "median_us": 1004400.6067,
+      "variation": 0.0899,
+      "reference_median_us": 996880.3004,
+      "ratio": 1.008,
+      "validation": "PASS"
+    }
+  ],
+  "reference_commands": {
+    "cuda_ref": "nvcc -std=c++17 -Xcompiler -Wall -arch=sm_70 -O3 -use_fast_math main.cu distance.cu -o hav_cuda_ref; CUDA_VISIBLE_DEVICES=1 ./hav_cuda_ref locations.txt 100",
+    "omp_ref_hostpar": "g++ -O2 -fopenmp -std=c++17 -Wall main_timed.cpp distance_hostpar.cpp -o hav_omp_timed_o2; OMP_NUM_THREADS=14 ./hav_omp_timed_o2 locations.txt 20",
+    "alpaka_cuda": "cmake --preset rel-cuda-nvcc-gcc -DCMAKE_CUDA_ARCHITECTURES=70 -Dalpaka_COMPILE_PEDANTIC=ON -Dalpaka_BUILD_BENCHMARKS=ON .; cmake --build build/rel-cuda-nvcc-gcc --target haversine_alpaka -j; CUDA_VISIBLE_DEVICES=1 ./build/rel-cuda-nvcc-gcc/benchmark/haversine/haversine_alpaka --input locations.txt --repeat 100 --samples 7",
+    "alpaka_cpu": "cmake --preset rel-host-cpu-gcc -Dalpaka_COMPILE_PEDANTIC=ON -Dalpaka_BUILD_BENCHMARKS=ON .; cmake --build build/rel-host-cpu-gcc --target haversine_alpaka -j; OMP_NUM_THREADS=14 ./build/rel-host-cpu-gcc/benchmark/haversine/haversine_alpaka --input locations.txt --repeat 20 --samples 7"
+  },
+  "reference_cpu_note": "The HeCBench haversine-omp source wraps the loop in an OpenMP target-offload region that g++ cannot compile and icpx/nvc are absent, so the CPU baseline is the same source with the offload pragma replaced by a plain host parallel-for (14 threads). The pinned reference main.cu's own host verification loop was also timed sequentially (1 thread) as a second baseline.",
+  "model_detail": "rosi_v100 unreachable during the whole task; used fwk394 (Quadro GV100, SM 7.0, driver 555.52.04, CUDA 12.5 V12.5.82, g++ 13.2.0, host Intel Xeon W-2175, CUDA_VISIBLE_DEVICES=1)."
+}
