@@ -1,0 +1,133 @@
+{
+  "benchmark": "histogram",
+  "protocol_run": "hecbench-alpaka3-2026-10-10",
+  "hecbench": {
+    "repo": "https://github.com/ORNL/HeCBench",
+    "sha": "0a17ee47ca6072192101036d4bf292e6612f22e6",
+    "cuda_source": "src/histogram-cuda/histogram_compare.cu",
+    "omp_source": "src/histogram-omp/histogram_compare_base.cpp",
+    "implemented_variant": "smem atomics (histogram_smem_atomics)"
+  },
+  "machine": {
+    "cpu": "Intel Xeon Gold 6136 (2 sockets x 12 cores, NUMA; 48 HT)",
+    "gpu": "Tesla V100-SXM2-32GB (CUDA_VISIBLE_DEVICES=1)",
+    "cuda": "12.6",
+    "gcc": "13.2",
+    "cmake": "3.28.3"
+  },
+  "build": {
+    "cpu": "cmake --preset rel-host-cpu-gcc -Dalpaka_COMPILE_PEDANTIC=ON",
+    "gpu": "cmake --preset rel-cuda-nvcc-gcc -DCMAKE_CUDA_ARCHITECTURES=70 -Dalpaka_COMPILE_PEDANTIC=ON"
+  },
+  "validation": {
+    "tolerance": "exact (integer)",
+    "rationale": "a histogram is an exact integer reduction of exact bucket assignments; the reference uses tolerance 0 for unsigned int, kept here, plus a total-count invariant sum(hist) == ACTIVE_CHANNELS * numPixels",
+    "nonzero_exit_on_failure": true,
+    "cases": [
+      1,
+      2,
+      3,
+      7,
+      15,
+      63,
+      127,
+      255,
+      256,
+      257,
+      511,
+      1000,
+      1023,
+      1024,
+      1025,
+      4095,
+      4096,
+      4097,
+      65537,
+      1048575,
+      1048576,
+      1048577,
+      2073600,
+      16777216
+    ],
+    "entropy_values": [
+      -1,
+      0,
+      1,
+      2,
+      3,
+      4
+    ]
+  },
+  "results": [
+    {
+      "config": "1920x1080=2073600",
+      "backend": "GpuCuda",
+      "genre": "uchar1",
+      "alpaka_median_us": 24.4464,
+      "ref_median_us": 47.188,
+      "ratio": 0.518,
+      "variation": 0.0021,
+      "validation": "PASSED"
+    },
+    {
+      "config": "1920x1080=2073600",
+      "backend": "GpuCuda",
+      "genre": "uchar4",
+      "alpaka_median_us": 65.2737,
+      "ref_median_us": 75.044,
+      "ratio": 0.87,
+      "variation": 0.002,
+      "validation": "PASSED"
+    },
+    {
+      "config": "1920x1080=2073600",
+      "backend": "GpuCuda",
+      "genre": "float4",
+      "alpaka_median_us": 85.3217,
+      "ref_median_us": 91.865,
+      "ratio": 0.929,
+      "variation": 0.0014,
+      "validation": "PASSED"
+    },
+    {
+      "config": "4096x4096=16777216",
+      "backend": "GpuCuda",
+      "genre": "uchar1",
+      "alpaka_median_us": 134.5141,
+      "ref_median_us": 244.414,
+      "ratio": 0.55,
+      "variation": 0.0002,
+      "validation": "PASSED"
+    },
+    {
+      "config": "4096x4096=16777216",
+      "backend": "GpuCuda",
+      "genre": "uchar4",
+      "alpaka_median_us": 206.4536,
+      "ref_median_us": 294.841,
+      "ratio": 0.7,
+      "variation": 0.0011,
+      "validation": "PASSED"
+    },
+    {
+      "config": "4096x4096=16777216",
+      "backend": "GpuCuda",
+      "genre": "float4",
+      "alpaka_median_us": 373.6349,
+      "ref_median_us": 415.008,
+      "ratio": 0.9,
+      "variation": 0.0019,
+      "validation": "PASSED"
+    }
+  ],
+  "cpu_note": "The histogram-omp reference is an OpenMP target-offload program for icpx (absent on rosi_v100); with g++ -fopenmp it falls back to the host and reports INCORRECT, so it is not a usable CPU performance or correctness baseline. CPU correctness is validated against the exact host reference. CPU Host/OmpBlocks throughput at N=2073600 (--repeat 20): uchar1 ~1.0 ms, uchar4 ~1.2 ms, float4 ~1.5 ms (48 threads, shared-machine variation).",
+  "ctest": {
+    "cpu": "PASSED"
+  },
+  "notes": [
+    "timing scope: repeat back-to-back histogram computations between two synchronisations, divided by repeat; one warm-up; median of 5 samples",
+    "reference values are the shared-memory ('smem atomics') variant, median of 5 invocations of histogram_cuda_ref --i=100",
+    "the smem partial-histogram algorithm is faster than the reference gmem variant, so the reported ratios are conservative relative to the reference's own fastest variant"
+  ],
+  "commit_sha": "9bb25f671b65a665b5a2b4d05f515727ffd97b0e"
+}
