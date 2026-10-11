@@ -1,0 +1,124 @@
+{
+  "benchmark": "colorwheel",
+  "mode": "color-encoding",
+  "precision": "single (mapping), double reference",
+  "hecbench_sha": "0a17ee47ca6072192101036d4bf292e6612f22e6",
+  "alpaka_base_sha": "6f13700c390a09df818a255d53e730f1f9d69456",
+  "impl_sha": "85d7faf8d7980a81883b0c1362a71360cfb64bb4",
+  "reference": {
+    "repo": "https://github.com/ORNL/HeCBench",
+    "sha": "0a17ee47ca6072192101036d4bf292e6612f22e6",
+    "cuda_src": "src/colorwheel-cuda/main.cu",
+    "cuda_src_blob": "566f40d84f8d7755060ac5829a47ac59fc8e5886",
+    "omp_src": "src/colorwheel-omp/main.cpp",
+    "omp_src_blob": "809de4d0ff44980047324410e0929737ee6e7277",
+    "cuda_build": "nvcc -std=c++17 -Xcompiler -Wall -arch=sm_70 -O3 main.cu -o colorwheel_cuda_ref",
+    "omp_build": "g++ -O2 -fopenmp -std=c++17 -w main.cpp -o colorwheel_omp_ref",
+    "omp_usable_as_baseline": false,
+    "license": "BSD-3-Clause (HeCBench); algorithm origin Middlebury flow code, Daniel Scharstein 2007"
+  },
+  "model": {
+    "gpu": "Tesla V100-SXM2-32GB",
+    "cpu": "Intel Core Ultra 7 255U",
+    "cuda": "12.6",
+    "arch": "sm_70",
+    "host_compiler": "g++ 13.2",
+    "cmake": "3.28"
+  },
+  "timing_scope": "repeat=100 back-to-back kernel launches between two synchronisations / repeat; median of samples; one warm-up",
+  "warmup": 1,
+  "reps_per_sample": 100,
+  "validation": "PASS (independent double host reference, per-channel absolute tolerance 1, NaN/Inf and output-range checks); sizes 3..4097 PASS on CPU and CUDA",
+  "reference_median_us": {
+    "1024": 1189.754,
+    "4096": 18325.672,
+    "8192": 72644.951
+  },
+  "rows": [
+    {
+      "size": 1024,
+      "backend": "Cuda",
+      "samples": 5,
+      "program_runs": 5,
+      "raw_samples_us": [36.4558, 36.6189, 36.7975, 36.3980, 36.4423, 36.6515, 36.4380, 36.4735, 36.3676, 36.3517, 36.6798, 36.6081, 36.4100, 36.3936, 36.4275, 36.5522, 36.5456, 36.5788, 36.5478, 36.3915, 36.6212, 36.7479, 37.7867, 37.0239, 36.5289],
+      "median_us": 36.5456,
+      "min_us": 36.3517,
+      "max_us": 37.7867,
+      "variation": 0.034,
+      "reference_median_us": 1189.754,
+      "ratio": 0.0307,
+      "validation": "PASS",
+      "repro": "CUDA_VISIBLE_DEVICES=0 ./build/rel-cuda-nvcc-gcc/benchmark/colorwheel/colorwheel_alpaka --range 10 --size 1024 --repeat 100 --samples 5"
+    },
+    {
+      "size": 4096,
+      "backend": "Cuda",
+      "raw_samples_us": [382.7791, 382.3695, 382.3977, 382.3084, 382.3580, 382.5109, 382.5452, 382.6400, 382.5314, 382.4101, 382.5489, 382.4620, 382.6152, 382.6613, 382.3647, 382.4634, 382.3371, 382.3629, 382.5668, 382.4219, 382.3130, 382.3067, 382.3480, 382.3599, 382.3883],
+      "median_us": 382.4101,
+      "min_us": 382.3067,
+      "max_us": 382.7791,
+      "variation": 0.001,
+      "reference_median_us": 18325.672,
+      "ratio": 0.0209,
+      "validation": "PASS",
+      "repro": "CUDA_VISIBLE_DEVICES=0 ./build/rel-cuda-nvcc-gcc/benchmark/colorwheel/colorwheel_alpaka --range 10 --size 4096 --repeat 100 --samples 5"
+    },
+    {
+      "size": 8192,
+      "backend": "Cuda",
+      "raw_samples_us": [1769.3239, 1619.5938, 1513.8154, 1504.4137, 1517.6725, 1769.3166, 1615.9293],
+      "median_us": 1615.9293,
+      "min_us": 1504.4137,
+      "max_us": 1769.3239,
+      "variation": 0.164,
+      "reference_median_us": 72644.951,
+      "ratio": 0.0222,
+      "validation": "PASS",
+      "repro": "CUDA_VISIBLE_DEVICES=0 ./build/rel-cuda-nvcc-gcc/benchmark/colorwheel/colorwheel_alpaka --range 10 --size 8192 --repeat 100 --samples 1"
+    },
+    {
+      "size": 1024,
+      "backend": "Host/OmpBlocks",
+      "threads": 14,
+      "raw_samples_us": [5406.0052, 4970.2910, 5166.0786],
+      "median_us": 5166.0786,
+      "variation": 0.084,
+      "reference_median_us": null,
+      "ratio": null,
+      "validation": "PASS",
+      "repro": "OMP_NUM_THREADS=14 ./build/rel-host-cpu-gcc/benchmark/colorwheel/colorwheel_alpaka --range 10 --size 1024 --repeat 100 --samples 3",
+      "note": "no like-for-like CPU baseline: the omp reference is an offload target region g++ cannot build"
+    },
+    {
+      "size": 4096,
+      "backend": "Host/OmpBlocks",
+      "threads": 14,
+      "raw_samples_us": [95333.9040, 97520.7961, 96081.2917],
+      "median_us": 96081.2917,
+      "variation": 0.023,
+      "reference_median_us": null,
+      "ratio": null,
+      "validation": "PASS",
+      "repro": "OMP_NUM_THREADS=14 ./build/rel-host-cpu-gcc/benchmark/colorwheel/colorwheel_alpaka --range 10 --size 4096 --repeat 100 --samples 3"
+    }
+  ],
+  "performance_exception": {
+    "type": "intentional below-match ratio",
+    "summary": "alpaka3 is 20-30x faster than the pinned CUDA reference because the port hoists the 55-entry ramp table from per-pixel local memory to per-block shared memory; the algorithm and per-pixel mapping are unchanged and verify() passes within tolerance 1",
+    "reference_ptxas": "664 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads"
+  },
+  "measurement_host_note": "Recorded rows are from rosi_v100 (Tesla V100-SXM2-32GB, sm_70). Post-fix pedantic builds and 25-size CPU/CUDA validation sweeps ran on fallback host fwk394 (Quadro GV100, sm_70); GPU spot-check size 4096 median 665.20 us relspread 0.0005 PASS.",
+  "tolerance_probe": {
+    "description": "single-precision reference pipeline vs double reference, max per-channel absolute error",
+    "max_error": 1,
+    "results": {
+      "100": {"max_error": 1, "bad_gt_1": 0, "n": 29403},
+      "101": {"max_error": 1, "bad_gt_1": 0, "n": 30000},
+      "256": {"max_error": 1, "bad_gt_1": 0, "n": 195075},
+      "1024": {"max_error": 1, "bad_gt_1": 0, "n": 3139587},
+      "4095": {"max_error": 1, "bad_gt_1": 0, "n": 50282508},
+      "4096": {"max_error": 1, "bad_gt_1": 0, "n": 50307075},
+      "4097": {"max_error": 1, "bad_gt_1": 0, "n": 50331648}
+    }
+  }
+}
