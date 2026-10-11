@@ -18,9 +18,12 @@
  *
  * This file provides a **separate, double-precision** implementation of the same mapping. It is not
  * the kernel source, is never compiled into the accelerator path, and is written independently of
- * the alpaka kernel: a bug in the portable kernel cannot be reproduced here by construction. The
- * colour-ramp table is the only shared data (the algorithm's definition), and it is rebuilt from the
- * six transition lengths exactly as the reference does.
+ * the alpaka kernel. It independently validates the mapping and colour path (hue index and
+ * saturation) against double precision. Because it rebuilds the colour ramp from the same segment
+ * formulas as the kernel, a systematic ramp-value error would not be caught here; the ramp values
+ * were hand-verified against the pinned HeCBench reference (`src/colorwheel-cuda/main.cu` at SHA
+ * `0a17ee47ca6072192101036d4bf292e6612f22e6`). The colour-ramp table is the only shared data (the
+ * algorithm's definition), rebuilt from the six transition lengths exactly as the reference does.
  *
  * Tolerance: the reference accepts an absolute difference of 1 per channel because the mapping is a
  * lossy `int(255*col)` truncation of a single-precision computation. The port compares the kernel
@@ -290,8 +293,10 @@ namespace colorwheel
     /** Compare the accelerator image against the independent double-precision reference.
      *
      * Every pixel (including the black axes) is checked channel by channel with the reference's own
-     * absolute tolerance of 1. The comparison reads the double reference, not the kernel code, so a
-     * wrong ramp, wrong hue or wrong saturation cannot pass. A nonzero exit code signals failure.
+     * absolute tolerance of 1. The comparison reads the double reference, not the kernel code, so it
+     * independently validates the mapping and colour path (hue index and saturation); a wrong hue or
+     * wrong saturation cannot pass. The ramp values are shared by both implementations and were
+     * hand-verified against the pinned reference. A nonzero exit code signals failure.
      *
      * @return @c EXIT_SUCCESS on success, @c EXIT_FAILURE on the first mismatch.
      */

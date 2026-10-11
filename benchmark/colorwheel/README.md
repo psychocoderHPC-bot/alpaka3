@@ -42,7 +42,8 @@ otherwise unchanged.
   Daniel Scharstein, 2007.
 - Reference sources are kept outside this repository and are not vendored.
 - Upstream HeCBench license: BSD-3-Clause ([HeCBench LICENSE](https://github.com/ORNL/HeCBench/blob/master/LICENSE)).
-  This port and its helper are `BSD-3-Clause`; the `misc.hpp` command-line helper is `ISC`.
+  This port and its helper are `BSD-3-Clause`; the `misc.hpp` command-line helper contains no
+  HeCBench code and is `MPL-2.0`, the repository license, matching the sibling `HACCmk/src/misc.hpp`.
 
 ## Parameters, modes, precision
 
@@ -91,8 +92,13 @@ CUDA_VISIBLE_DEVICES=0 ./build/rel-cuda-nvcc-gcc/benchmark/colorwheel/colorwheel
 `src/helper.hpp` contains an **independent double-precision** implementation of the same mapping. It
 does not reuse the kernel's ramp table, its indexing or its shared-memory staging; it rebuilds the
 colour ramp from the six transition lengths, recomputes `fx`, `fy` and every channel in double, and
-is separate from the device code. A wrong ramp, wrong hue index or wrong saturation in the portable
-kernel therefore cannot pass.
+is separate from the device code. This validates the mapping and colour path (hue indexing and
+saturation) against an independent double-precision reference.
+
+The host reference shares the kernel's exact ramp-segment formulas, so a systematic ramp-value bug
+would not be caught by the comparison; the ramp values were therefore hand-verified against the
+pinned HeCBench reference (`src/colorwheel-cuda/main.cu` at SHA
+`0a17ee47ca6072192101036d4bf292e6612f22e6`).
 
 - `verify()` compares the accelerator image against the double reference with the reference's own
   absolute per-channel tolerance of 1 (`const int tolerance = 1`). The tolerance is fixed at 1
@@ -134,9 +140,13 @@ Kernel-compute scope, `repeat = 100`, median of five independent samples of five
 | 8192 | 1520 us (range 1504-1769) | 72660 us        | 0.021 | PASS |
 
 The port is about 20-30x faster than the pinned CUDA reference, far below the 1.00 match threshold.
-This is a genuine reduction in work, not a different algorithm: both compute the same 55-entry colour
-ramp, the same `atan2` hue and the same saturation per pixel, and `verify()` confirms every channel of
-every pixel within tolerance 1. The reason is the ramp table's storage class:
+This ratio well below 1.00 reflects an intentional storage-class optimization, disclosed here and in
+[Limitations and performance exception](#limitations-and-performance-exception): the reference keeps
+its 55-entry ramp table in local memory and rebuilds it per pixel, while the port hoists the same
+table into per-block shared memory. It is a genuine reduction in work, not a different algorithm:
+both compute the same 55-entry colour ramp, the same `atan2` hue and the same saturation per pixel,
+and `verify()` confirms every channel of every pixel within tolerance 1. The reason is the ramp
+table's storage class:
 
 - The reference declares `int cw[MAXCOLS][3]` **inside** `computeColor`, so the six `setcols` loops
   rebuild the 55-entry table in every thread, once per pixel. `ptxas -v` reports a 664-byte local

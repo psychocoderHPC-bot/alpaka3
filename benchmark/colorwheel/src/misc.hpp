@@ -1,5 +1,5 @@
 /* Copyright 2026 René Widera
- * SPDX-License-Identifier: BSD-3-Clause
+ * SPDX-License-Identifier: MPL-2.0
  */
 
 #pragma once
