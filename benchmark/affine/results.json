@@ -1,0 +1,218 @@
+{
+  "benchmark": "affine",
+  "reference_provenance": {
+    "project": "ORNL/HeCBench",
+    "commit": "0a17ee47ca6072192101036d4bf292e6612f22e6",
+    "cuda_sources": {
+      "src/affine-cuda/main.cu": "1cead9d71945d1a2f686382439e4a0b4e189edc8",
+      "src/affine-cuda/kernel.h": "7c1a895a4a1cfd9c17e70fb5e8b8ba932b5cf4b4",
+      "src/affine-cuda/reference.h": "22b59f45dc00de3c3d4868c89511a6329c41351f"
+    },
+    "omp_sources": {
+      "src/affine-omp/main.cpp": "7ff634f8d5098542bd7eef9e59b5a73f80291025"
+    },
+    "upstream_license": "Xilinx SDAccel_Examples BSD-3-Clause (source header); reference not vendored",
+    "alpaka_impl_license": "BSD-3-Clause"
+  },
+  "impl": "alpaka3",
+  "branch": "benchmark/affine",
+  "base_sha": "6f13700c390a09df818a255d53e730f1f9d69456",
+  "precision": "uint16-result, float-transform",
+  "timing_scope": "repeat transform passes between two synchronisations / repeat",
+  "warmup": 1,
+  "validation_tolerance": "1 grey level (uint16); justified by the reference's own reported GPU-vs-host max error of 1",
+  "size_matrix_validated": [
+    "1x1",
+    "2x3",
+    "3x1",
+    "7x5",
+    "15x16",
+    "16x16",
+    "17x19",
+    "31x33",
+    "64x64",
+    "65x63",
+    "127x129",
+    "255x257",
+    "256x256",
+    "257x255",
+    "512x512"
+  ],
+  "rows": [
+    {
+      "mode": "fixed affine transform",
+      "size": "512x512",
+      "backend": "Cuda",
+      "gpu": "Quadro GV100 (SM 7.0)",
+      "cpu": "x86_64 host",
+      "compiler": "nvcc 12.5.82 (g++ 13.2)",
+      "flags": "cmake rel-cuda-nvcc-gcc -DCMAKE_CUDA_ARCHITECTURES=70 -Dalpaka_COMPILE_PEDANTIC=ON",
+      "threads": 1,
+      "gpu_device": 1,
+      "reps": 9,
+      "raw_samples_us": [
+        4.5261,
+        4.5319,
+        4.5088,
+        4.5655,
+        4.5371,
+        4.5128,
+        4.5457,
+        4.5416,
+        4.5154
+      ],
+      "median_us": 4.5319,
+      "variation": 0.0125,
+      "reference_median_us": 3.73,
+      "ratio": 1.21,
+      "validation": "PASS"
+    },
+    {
+      "mode": "fixed affine transform",
+      "size": "2048x2048",
+      "backend": "Cuda",
+      "gpu": "Quadro GV100 (SM 7.0)",
+      "compiler": "nvcc 12.5.82 (g++ 13.2)",
+      "flags": "cmake rel-cuda-nvcc-gcc -DCMAKE_CUDA_ARCHITECTURES=70 -Dalpaka_COMPILE_PEDANTIC=ON",
+      "reps": 7,
+      "raw_samples_us": [
+        57.3909,
+        57.8035,
+        57.7479,
+        57.9176,
+        58.1564,
+        57.9758,
+        58.0997
+      ],
+      "median_us": 57.9176,
+      "variation": 0.0132,
+      "reference_median_us": null,
+      "ratio": null,
+      "validation": "PASS",
+      "note": "shared remote GPU; outliers on individual samples"
+    },
+    {
+      "mode": "fixed affine transform",
+      "size": "257x255",
+      "backend": "Cuda",
+      "gpu": "Quadro GV100 (SM 7.0)",
+      "compiler": "nvcc 12.5.82 (g++ 13.2)",
+      "reps": 7,
+      "raw_samples_us": [
+        3.9633,
+        4.9022,
+        3.9248,
+        3.925,
+        3.9248,
+        3.9241,
+        3.9242
+      ],
+      "median_us": 3.9248,
+      "variation": 0.2492,
+      "reference_median_us": null,
+      "ratio": null,
+      "validation": "PASS",
+      "note": "shared remote GPU; outliers on individual samples"
+    },
+    {
+      "mode": "fixed affine transform",
+      "size": "512x512",
+      "backend": "Host",
+      "executor": "OmpBlocks",
+      "cpu": "x86_64 host",
+      "compiler": "g++ 13.3",
+      "flags": "cmake rel-host-cpu-gcc -Dalpaka_COMPILE_PEDANTIC=ON",
+      "threads": 14,
+      "reps": 7,
+      "raw_samples_us": [
+        630.6941,
+        637.5143,
+        679.2738,
+        592.9818,
+        636.583,
+        616.9643,
+        574.3782
+      ],
+      "median_us": 630.6941,
+      "variation": 0.1663,
+      "reference_median_us": 272.7,
+      "ratio": 2.31,
+      "validation": "PASS"
+    },
+    {
+      "mode": "fixed affine transform",
+      "size": "2048x2048",
+      "backend": "Host",
+      "executor": "OmpBlocks",
+      "compiler": "g++ 13.3",
+      "flags": "cmake rel-host-cpu-gcc -Dalpaka_COMPILE_PEDANTIC=ON",
+      "threads": 14,
+      "reps": 7,
+      "raw_samples_us": [
+        15314.8054,
+        16444.949,
+        18165.629,
+        17411.8407,
+        17237.5103,
+        17083.7485,
+        16053.4158
+      ],
+      "median_us": 17083.7485,
+      "variation": 0.1669,
+      "reference_median_us": null,
+      "ratio": null,
+      "validation": "PASS"
+    },
+    {
+      "mode": "fixed affine transform",
+      "size": "512x512",
+      "backend": "Host",
+      "executor": "CpuSerial",
+      "compiler": "g++ 13.3",
+      "flags": "cmake rel-host-cpu-gcc -Dalpaka_COMPILE_PEDANTIC=ON",
+      "threads": 1,
+      "reps": 7,
+      "raw_samples_us": [
+        1862.197,
+        1908.5085,
+        1947.3101,
+        1915.099,
+        1939.2271,
+        1849.4667,
+        2478.991
+      ],
+      "median_us": 1915.099,
+      "variation": 0.3287,
+      "reference_median_us": 272.7,
+      "ratio": 7.02,
+      "validation": "PASS"
+    }
+  ],
+  "reference_commands": {
+    "cuda": "nvcc -std=c++17 -arch=sm_70 -O3 refs/affine-cuda/main.cu -o affine_cuda_ref; CUDA_VISIBLE_DEVICES=1 ./affine_cuda_ref input512.raw out.raw 1000000  # prints 'Average kernel execution time'",
+    "cpu": "g++ -O2 -fopenmp -std=c++17 -Irefs/affine-cuda affine_omp_hostpar.cpp -o affine_omp_hostpar  # OpenMP target pragmas replaced by a host parallel-for; OMP_NUM_THREADS=14 ./affine_omp_hostpar input512.raw out.raw 2000 -> ~272.7 us"
+  },
+  "reference_reported_error": 1,
+  "performance_investigation": {
+    "finding": "GPU ratio 1.11 > 1.10 bound due to per-element index remapping in onAcc::makeIdxMap",
+    "frame_shape_sweep_median_us_512x512": {
+      "64x4": 4.51,
+      "128x2": 4.53,
+      "16x16": 9.02,
+      "32x8": 5.44,
+      "8x32": 14.04,
+      "256x1": 4.56
+    },
+    "explicit_thread_index_kernel": {
+      "median_us": 3.97,
+      "ratio": 0.97,
+      "rejected_reason": "not host-portable: the host OpenMP executor (OmpBlocks) requires one thread per block and produces wrong results with an exact multi-thread ThreadSpec"
+    },
+    "ncu_kernel_time_us": {
+      "alpaka": 6.7,
+      "reference": 5.4
+    },
+    "decision": "keep the portable single-source makeIdxMap form; accept the ~11% documented exception"
+  },
+  "cpu_reference_note": "The HeCBench affine-omp source uses an OpenMP target offload region that g++ cannot compile and icpx/nvc are absent, so the CPU baseline is the same source with the offload pragmas replaced by a plain host parallel-for (14 threads), median 272.7 us over 7 runs of 2000 iters."
+}
