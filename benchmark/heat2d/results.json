@@ -1,0 +1,60 @@
+{
+  "benchmark": "heat2d",
+  "workload_sha": "0a17ee47ca6072192101036d4bf292e6612f22e6",
+  "alpaka_commit": "34b7f72763e54c56ca8f09a19eb44f23ce01be18",
+  "impl": "benchmark/heat2d (portable alpaka, single kernel)",
+  "cpu_model": "Intel Xeon (rosi_v100 node, 48 cores)",
+  "gpu_model": "Tesla V100-SXM2-32GB (CUDA_VISIBLE_DEVICES=1)",
+  "compilers": {
+    "cpu": "g++ 13.2, rel-host-cpu-gcc, -Dalpaka_COMPILE_PEDANTIC=ON, OMP_NUM_THREADS=8",
+    "cuda": "nvcc 12.6 sm_70, rel-cuda-nvcc-gcc, -DCMAKE_CUDA_ARCHITECTURES=70 -Dalpaka_COMPILE_PEDANTIC=ON",
+    "ref_cuda": "nvcc -std=c++17 -arch=sm_70 -O3",
+    "ref_cpu": "g++ -O2 -fopenmp -std=c++17"
+  },
+  "references": {
+    "cuda": "/root/heat2d-ref-src/heat2d-cuda/heat2d_cuda_ref (ORNL/HeCBench src/heat2d-cuda/main.cu)",
+    "cpu": "/root/heat2d-ref-src/heat2d-omp/heat2d_omp_ref (ORNL/HeCBench src/heat2d-omp/main.cpp; g++ without offload -> host fallback)"
+  },
+  "timing_scope": "wall time of the full niter-launch loop divided by niter (reference scope); warmup before measured runs; median of measured runs",
+  "warmup": true,
+  "reps": 5,
+  "metrics": [
+    {
+      "config": "512x512x1000", "backend": "cuda", "validation": "PASS",
+      "alpaka_per_iter_us_samples": [5.350687, 5.367431, 5.462878, 5.369446, 5.324994],
+      "alpaka_median_us": 5.367431, "alpaka_variation_pct": 0.37,
+      "ref_per_iter_us_samples": [5.5, 5.5, 5.6, 5.5, 5.5],
+      "ref_median_us": 5.5, "ratio": 0.976
+    },
+    {
+      "config": "1024x1024x200", "backend": "cuda", "validation": "PASS",
+      "alpaka_per_iter_us_samples": [16.079075, 16.086430, 16.256365],
+      "alpaka_median_us": 16.086430, "alpaka_variation_pct": 1.71,
+      "ref_per_iter_us_samples": [18.5, 16.7, 16.7],
+      "ref_median_us": 16.7, "ratio": 0.963
+    },
+    {
+      "config": "4096x4096x100", "backend": "cuda", "validation": "PASS",
+      "alpaka_per_iter_us_samples": [204.708110, 188.063950, 187.936160, 187.858670, 188.076020],
+      "alpaka_median_us": 188.063950, "alpaka_variation_pct": 3.5,
+      "ref_per_iter_us_samples": [204.7, 204.3, 205.5],
+      "ref_median_us": 204.7, "ratio": 0.919
+    },
+    {
+      "config": "512x512x1000", "backend": "cpu-ompblocks", "validation": "PASS",
+      "alpaka_per_iter_us_samples": [169.673013, 172.722679, 173.114501],
+      "alpaka_median_us": 172.722679, "alpaka_variation_pct": 1.87,
+      "ref_per_iter_us_samples": [585.8, 583.8, 584.2],
+      "ref_median_us": 584.2, "ratio": 0.296,
+      "note": "g++ OpenMP reference does not offload (target region runs on host); not a like-for-like CPU baseline"
+    }
+  ],
+  "repro": {
+    "cpu_build": "cmake --preset rel-host-cpu-gcc -Dalpaka_COMPILE_PEDANTIC=ON . && cmake --build build/rel-host-cpu-gcc --target heat2d_alpaka -j",
+    "cuda_build": "cmake --preset rel-cuda-nvcc-gcc -DCMAKE_CUDA_ARCHITECTURES=70 -Dalpaka_COMPILE_PEDANTIC=ON . && cmake --build build/rel-cuda-nvcc-gcc --target heat2d_alpaka -j",
+    "cpu_run": "OMP_NUM_THREADS=8 ./build/rel-host-cpu-gcc/benchmark/heat2d/heat2d_alpaka --lx 512 --ly 512 --iters 1000 --repeat 5",
+    "cuda_run": "CUDA_VISIBLE_DEVICES=1 ./build/rel-cuda-nvcc-gcc/benchmark/heat2d/heat2d_alpaka --lx 4096 --ly 4096 --iters 100 --repeat 5",
+    "ref_cuda": "nvcc -std=c++17 -arch=sm_70 -O3 main.cu -o heat2d_cuda_ref && ./heat2d_cuda_ref 4096 4096 100",
+    "ref_cpu": "g++ -O2 -fopenmp -std=c++17 main.cpp -o heat2d_omp_ref && OMP_NUM_THREADS=8 ./heat2d_omp_ref 512 512 1000"
+  }
+}
