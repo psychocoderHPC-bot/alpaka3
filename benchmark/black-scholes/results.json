@@ -1,0 +1,139 @@
+{
+  "benchmark": "black-scholes",
+  "impl": "alpaka3",
+  "branch": "benchmark/black-scholes",
+  "base_sha": "6f13700c390a09df818a255d53e730f1f9d69456",
+  "reference_provenance": {
+    "project": "ORNL/HeCBench",
+    "commit": "0a17ee47ca6072192101036d4bf292e6612f22e6",
+    "cuda_sources": {
+      "src/black-scholes-cuda/blackScholesAnalyticEngine.cu": "51fc19ea16e906c34bf0d4263ede703f303302cd",
+      "src/black-scholes-cuda/blackScholesAnalyticEngineKernels.cu": "668c24d9f0b58e6d7a657e72ce03b7302276268c",
+      "src/black-scholes-cuda/blackScholesAnalyticEngineKernels.cuh": "215cb5b8a3d452757f848e8cd5b24c9e34ab850a",
+      "src/black-scholes-cuda/blackScholesAnalyticEngineKernelsCpu.cu": "5133adc1ab6b5cd18ee727a5b809466119c7600c",
+      "src/black-scholes-cuda/blackScholesAnalyticEngineKernelsCpu.cuh": "14ca159479e0626aff8c369a18251bf058c5a523",
+      "src/black-scholes-cuda/blackScholesAnalyticEngineStructs.cuh": "1dcfa47585c0cc409c0f4b6f3ef4d83ab4c12167",
+      "src/black-scholes-cuda/errorFunctConsts.cuh": "90e2056c1e9fe6a112c326204f2edf4d1ad6811f"
+    },
+    "omp_sources": {
+      "src/black-scholes-omp/blackScholesAnalyticEngine.cpp": "c795c3efadee9ba09b75af79311ca4825f2ac452",
+      "src/black-scholes-omp/blackScholesAnalyticEngineKernels.cpp": "01c63443514ddd50b12dcf9e50dc10e2f3e300a3",
+      "src/black-scholes-omp/blackScholesAnalyticEngineKernelsCpu.cpp": "4784072d98680ff08137c705d43b942ceaaafb3e"
+    },
+    "readme_entry": "black-scholes (cuda) -> Bundesbank/FinanceBench lineage, analytic engine ported from QuantLib; upstream license: HeCBench BSD-3-Clause (Argonne National Laboratory, Zheming Jin)",
+    "alpaka_impl_license": "BSD-3-Clause"
+  },
+  "precision": "float input/arith, double oracle",
+  "algorithm": "Black-Scholes analytic engine (QuantLib port); 37 pinned settings streamed as settings[i mod 37]",
+  "timing_scope": "per kernel launch, end-to-end on queue; median of samples after 1 warm-up; comparable to reference 'Average kernel execution time on GPU'",
+  "warmup": 1,
+  "validation": "independent double-precision std::erfc oracle; NaN/Inf rejected; abs tolerance 1.0e-4 (= reference's own published-price tolerance)",
+  "machine": {
+    "target": "rosi_v100",
+    "hostname": "gv016",
+    "gpu": "Tesla V100-SXM2-32GB (SM 7.0), driver 570.158.01, 32768 MiB",
+    "cpu": "Intel Xeon Gold 6136 @ 3.00GHz, 48 cores",
+    "os": "Linux",
+    "cuda": "12.6.85",
+    "gcc": "13.2.0",
+    "cmake": "3.28.3",
+    "ninja": "1.11.1"
+  },
+  "gpu_device": 0,
+  "compiler_flags": {
+    "cuda": "cmake rel-cuda-nvcc-gcc -DCMAKE_CUDA_ARCHITECTURES=70 -Dalpaka_COMPILE_PEDANTIC=ON",
+    "cpu": "cmake rel-host-cpu-gcc -Dalpaka_COMPILE_PEDANTIC=ON"
+  },
+  "rows": [
+    {
+      "config": "GPU",
+      "backend": "Cuda",
+      "executor": "GpuCuda",
+      "options": 50000000,
+      "repeat": 100,
+      "samples": 5,
+      "raw_samples_ms": [
+        2.26838,
+        2.26864,
+        2.26844,
+        2.26834,
+        2.26851
+      ],
+      "median_ms": 2.26844,
+      "variation_relspread": 0.0001,
+      "reference_median_ms": 2.818931,
+      "reference_raw_ms": [
+        2.818931,
+        2.805454,
+        2.819754,
+        2.821242,
+        2.820264
+      ],
+      "ratio": 0.805,
+      "validation": "PASS"
+    },
+    {
+      "config": "CPU-OpenMP",
+      "backend": "Host",
+      "executor": "CpuOmpBlocks",
+      "options": 50000000,
+      "repeat": 1,
+      "samples": 1,
+      "raw_samples_ms": [
+        69.47661
+      ],
+      "median_ms": 69.47661,
+      "variation_relspread": 0.0,
+      "reference_median_ms": 106.35745,
+      "reference_raw_ms": [
+        106.60532,
+        106.65775,
+        106.40927,
+        106.35745,
+        106.81329
+      ],
+      "ratio": 0.653,
+      "validation": "PASS"
+    },
+    {
+      "config": "CPU-serial",
+      "backend": "Host",
+      "executor": "CpuSerial",
+      "options": 50000000,
+      "repeat": 1,
+      "samples": 1,
+      "raw_samples_ms": [
+        2628.00269
+      ],
+      "median_ms": 2628.00269,
+      "variation_relspread": 0.0,
+      "reference_median_ms": 106.35745,
+      "ratio": 24.71,
+      "validation": "PASS",
+      "note": "single-thread sanity point, not a competitive baseline"
+    }
+  ],
+  "validation_evidence": {
+    "gpu_max_abs_vs_double_oracle": 9.861e-06,
+    "host_max_abs_vs_double_oracle": 1.081e-05,
+    "max_abs_vs_published": 5.388e-05,
+    "tolerance": 0.0001,
+    "sizes": [
+      7,
+      37,
+      3700,
+      12345,
+      37000,
+      50000000
+    ]
+  },
+  "reference_commands": {
+    "cuda": "nvcc -std=c++17 -Xcompiler -Wall -arch=sm_70 -O3 src/black-scholes-cuda/blackScholesAnalyticEngine.cu -o blackscholes_cuda_ref; CUDA_VISIBLE_DEVICES=0 ./blackscholes_cuda_ref 100  # prints 'Average kernel execution time on GPU'",
+    "cpu": "cd src/black-scholes-omp && g++ -O2 -fopenmp -std=c++17 -I. -include blackScholesAnalyticEngineStructs.h -include cfloat ref_cpu_main.cpp blackScholesAnalyticEngineKernelsCpu.cpp -o blackscholes_cpu_ref; OMP_NUM_THREADS=48 ./blackscholes_cpu_ref 1  # calls reference getOutValOptionCpu in an OpenMP for"
+  },
+  "repro_commands": {
+    "cpu": "cmake --preset rel-host-cpu-gcc -Dalpaka_COMPILE_PEDANTIC=ON . && cmake --build build/rel-host-cpu-gcc --target black-scholes_alpaka -j && OMP_NUM_THREADS=48 ./build/rel-host-cpu-gcc/benchmark/black-scholes/black-scholes_alpaka --options 50000000 --repeat 100 --samples 5",
+    "cuda": "export PATH=/usr/local/cuda-12.6/bin:$PATH CUDA_HOME=/usr/local/cuda-12.6; cmake --preset rel-cuda-nvcc-gcc -DCMAKE_CUDA_ARCHITECTURES=70 -Dalpaka_COMPILE_PEDANTIC=ON . && cmake --build build/rel-cuda-nvcc-gcc --target black-scholes_alpaka -j && CUDA_VISIBLE_DEVICES=0 ./build/rel-cuda-nvcc-gcc/benchmark/black-scholes/black-scholes_alpaka --options 50000000 --repeat 100 --samples 5"
+  },
+  "commit": "28ec29677c176142f9ff281051c3f7e8c1692ae4"
+}
