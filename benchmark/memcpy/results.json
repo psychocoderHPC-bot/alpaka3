@@ -1,0 +1,286 @@
+{
+  "benchmark": "memcpy",
+  "protocol_run": "hecbench-alpaka3-2026-10-10",
+  "hecbench": {
+    "repo": "https://github.com/ORNL/HeCBench",
+    "sha": "0a17ee47ca6072192101036d4bf292e6612f22e6",
+    "cuda_source": {
+      "path": "src/memcpy-cuda/main.cu",
+      "blob": "4a9230f9c3cf98854c5eea1d52dcb782ac25cfb4"
+    },
+    "omp_source": {
+      "path": "src/memcpy-omp/main.cpp",
+      "blob": "4f8d7f585f7289d26398720d7be57e895b75ba5e"
+    }
+  },
+  "reference_build": {
+    "cuda": "nvcc -std=c++17 -Xcompiler -Wall -arch=sm_70 -O3 main.cu -o memcpy_cuda_ref",
+    "omp": "g++ -O2 -fopenmp -std=c++17 main_omp.cpp -o memcpy_omp_ref"
+  },
+  "machine": {
+    "cpu": "Intel(R) Xeon(R) Gold 6136 CPU @ 3.00GHz (2 sockets x 12 cores, 48 HT)",
+    "gpu": "Tesla V100-SXM2-32GB (CUDA_VISIBLE_DEVICES=1)",
+    "cuda": "12.6",
+    "gcc": "13.2.0",
+    "cmake": "3.28.3"
+  },
+  "build": {
+    "cpu": "cmake --preset rel-host-cpu-gcc -Dalpaka_COMPILE_PEDANTIC=ON .",
+    "gpu": "cmake --preset rel-cuda-nvcc-gcc -DCMAKE_CUDA_ARCHITECTURES=70 -Dalpaka_COMPILE_PEDANTIC=ON ."
+  },
+  "sampling": {
+    "timing_scope": "repeat back-to-back enqueues between two synchronisations, divided by repeat",
+    "warmup": 1,
+    "samples": 5,
+    "metric": "median per-copy time in microseconds"
+  },
+  "validation": {
+    "tolerance": "0 (byte-exact)",
+    "rationale": "deterministic position-dependent pattern; destination poisoned with the inverse pattern before the copy, so a skipped/truncated/shifted copy fails at a known offset. A byte payload read as float is often NaN, so an exact byte compare is strictly stronger than a NaN/Inf test.",
+    "nonzero_exit_on_failure": true,
+    "validated_sizes": [
+      1,
+      2,
+      3,
+      7,
+      15,
+      63,
+      64,
+      65,
+      127,
+      255,
+      256,
+      257,
+      511,
+      512,
+      513,
+      1000,
+      1023,
+      1024,
+      1025,
+      4095,
+      4096,
+      4097,
+      65535,
+      65536,
+      65537,
+      1048575,
+      1048576,
+      1048577
+    ],
+    "modes": [
+      "h2d",
+      "d2h",
+      "d2d"
+    ],
+    "backends": [
+      "CpuOmpBlocks",
+      "GpuCuda"
+    ]
+  },
+  "results": [
+    {
+      "mode": "H2D",
+      "size_bytes": 64,
+      "backend": "Cuda",
+      "alpaka_median_us": 1.558,
+      "reference_median_us": 1.50088,
+      "ratio_alpaka_over_ref": 1.0381,
+      "variation_pct": 1.47,
+      "reps": 5,
+      "raw_samples_us": [
+        1.558,
+        1.5597,
+        1.5406,
+        1.5634,
+        1.5493
+      ],
+      "validation": "PASS",
+      "reference": "HeCBench memcpy-cuda nvcc sm_70"
+    },
+    {
+      "mode": "D2H",
+      "size_bytes": 64,
+      "backend": "Cuda",
+      "alpaka_median_us": 7.1503,
+      "reference_median_us": 7.08862,
+      "ratio_alpaka_over_ref": 1.0087,
+      "variation_pct": 0.98,
+      "reps": 5,
+      "raw_samples_us": [
+        7.0956,
+        7.1549,
+        7.1654,
+        7.1269,
+        7.1503
+      ],
+      "validation": "PASS",
+      "reference": "HeCBench memcpy-cuda nvcc sm_70"
+    },
+    {
+      "mode": "H2D",
+      "size_bytes": 65536,
+      "backend": "Cuda",
+      "alpaka_median_us": 15.4948,
+      "reference_median_us": 15.5265,
+      "ratio_alpaka_over_ref": 0.9979,
+      "variation_pct": 0.29,
+      "reps": 5,
+      "raw_samples_us": [
+        15.4948,
+        15.4739,
+        15.4892,
+        15.5183,
+        15.5123
+      ],
+      "validation": "PASS",
+      "reference": "HeCBench memcpy-cuda nvcc sm_70"
+    },
+    {
+      "mode": "D2H",
+      "size_bytes": 65536,
+      "backend": "Cuda",
+      "alpaka_median_us": 23.7103,
+      "reference_median_us": 23.7686,
+      "ratio_alpaka_over_ref": 0.9975,
+      "variation_pct": 0.59,
+      "reps": 5,
+      "raw_samples_us": [
+        23.7103,
+        23.598,
+        23.5914,
+        23.7308,
+        23.7262
+      ],
+      "validation": "PASS",
+      "reference": "HeCBench memcpy-cuda nvcc sm_70"
+    },
+    {
+      "mode": "H2D",
+      "size_bytes": 2097152,
+      "backend": "Cuda",
+      "alpaka_median_us": 392.0231,
+      "reference_median_us": 392.24,
+      "ratio_alpaka_over_ref": 0.9994,
+      "variation_pct": 0.63,
+      "reps": 5,
+      "raw_samples_us": [
+        392.1601,
+        392.3082,
+        389.8424,
+        392.0231,
+        391.489
+      ],
+      "validation": "PASS",
+      "reference": "HeCBench memcpy-cuda nvcc sm_70"
+    },
+    {
+      "mode": "D2H",
+      "size_bytes": 2097152,
+      "backend": "Cuda",
+      "alpaka_median_us": 472.3644,
+      "reference_median_us": 474.508,
+      "ratio_alpaka_over_ref": 0.9955,
+      "variation_pct": 0.32,
+      "reps": 5,
+      "raw_samples_us": [
+        472.77,
+        472.0922,
+        471.2513,
+        472.415,
+        472.3644
+      ],
+      "validation": "PASS",
+      "reference": "HeCBench memcpy-cuda nvcc sm_70"
+    },
+    {
+      "mode": "H2D",
+      "size_bytes": 67108864,
+      "backend": "Cuda",
+      "alpaka_median_us": 13376.0908,
+      "reference_median_us": 13561.5,
+      "ratio_alpaka_over_ref": 0.9863,
+      "variation_pct": 0.44,
+      "reps": 5,
+      "raw_samples_us": [
+        13353.8404,
+        13376.0908,
+        13413.2797,
+        13378.0,
+        13390.0
+      ],
+      "validation": "PASS",
+      "reference": "HeCBench memcpy-cuda nvcc sm_70"
+    },
+    {
+      "mode": "D2H",
+      "size_bytes": 67108864,
+      "backend": "Cuda",
+      "alpaka_median_us": 13699.9266,
+      "reference_median_us": 14685.5,
+      "ratio_alpaka_over_ref": 0.9329,
+      "variation_pct": 0.36,
+      "reps": 5,
+      "raw_samples_us": [
+        13699.4191,
+        13748.7267,
+        13699.9266,
+        13705.0,
+        13710.0
+      ],
+      "validation": "PASS",
+      "reference": "HeCBench memcpy-cuda nvcc sm_70"
+    },
+    {
+      "mode": "D2D",
+      "size_bytes": 64,
+      "backend": "Cuda",
+      "alpaka_median_us": 2.2332,
+      "reference_median_us": null,
+      "ratio_alpaka_over_ref": null,
+      "variation_pct": 1.4200000000000002,
+      "reps": 5,
+      "raw_samples_us": [
+        2.2331,
+        2.2332,
+        2.2053,
+        2.2348,
+        2.2371
+      ],
+      "validation": "PASS",
+      "reference": "none (mode not in reference)"
+    },
+    {
+      "mode": "D2D",
+      "size_bytes": 2097152,
+      "backend": "Cuda",
+      "alpaka_median_us": 3.2797,
+      "reference_median_us": null,
+      "ratio_alpaka_over_ref": null,
+      "variation_pct": 0.16,
+      "reps": 5,
+      "raw_samples_us": [
+        3.2772,
+        3.2807,
+        3.2793,
+        3.2797,
+        3.2825
+      ],
+      "validation": "PASS",
+      "reference": "none (mode not in reference)"
+    }
+  ],
+  "repro_commands": [
+    "cmake --preset rel-host-cpu-gcc -Dalpaka_COMPILE_PEDANTIC=ON .",
+    "cmake --build build/rel-host-cpu-gcc --target memcpy_alpaka -j",
+    "OMP_NUM_THREADS=48 ./build/rel-host-cpu-gcc/benchmark/memcpy/memcpy_alpaka --repeat 4 --samples 3",
+    "cmake --preset rel-cuda-nvcc-gcc -DCMAKE_CUDA_ARCHITECTURES=70 -Dalpaka_COMPILE_PEDANTIC=ON .",
+    "cmake --build build/rel-cuda-nvcc-gcc --target memcpy_alpaka -j",
+    "CUDA_VISIBLE_DEVICES=1 ./build/rel-cuda-nvcc-gcc/benchmark/memcpy/memcpy_alpaka --repeat 8192 --samples 5"
+  ],
+  "limitations": [
+    "Pinned reference sizes are 64 B .. 2 MiB (16 sizes size[i]=1<<(i+6)), not 64 B .. 32 GB. Larger sizes are reachable through --sizes/--max-bytes.",
+    "The reference has no device-to-device mode; D2D is validated against the host pattern only and has no runtime ratio.",
+    "The OpenMP reference is an OpenMP target-offload program (icpx). Built with g++ -fopenmp it falls back to the host and moves no data, so it is not a CPU performance baseline; CPU correctness uses the byte-exact host reference."
+  ]
+}
