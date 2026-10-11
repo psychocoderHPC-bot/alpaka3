@@ -1,0 +1,61 @@
+{
+  "benchmark": "ising",
+  "workload": "HeCBench ising (2D checkerboard Ising Monte-Carlo)",
+  "reference_provenance": {
+    "repo": "https://github.com/ORNL/HeCBench",
+    "commit": "0a17ee47ca6072192101036d4bf292e6612f22e6",
+    "files": {
+      "src/ising-cuda/main.cu": "e43f3996380963788b77d75608096a47f66fa171",
+      "src/ising-cuda/reference.h": "f8612cfc69585a0270f4a72c536a36c9d781e6db",
+      "src/ising-omp/main.cpp": "cb82aebbc385458171d39924732f26e9a478aa43"
+    },
+    "license": "NVIDIA 2019 MIT-style (see sources)"
+  },
+  "implementation": {
+    "branch": "benchmark/ising",
+    "base_sha": "6f13700c390a09df818a255d53e730f1f9d69456",
+    "single_source": "benchmark/ising/src/main_alpaka.cpp",
+    "reference_helper": "benchmark/ising/src/helper.hpp",
+    "layout": "packed black/white arrays, nx*(ny/2) spins each, single precision expf-equivalent acceptance",
+    "threads_per_frame": 128
+  },
+  "validation": {
+    "method": "independent in-place double-precision full-lattice checkerboard reference; exact signed-char comparison; domain check for {-1,+1}",
+    "tolerance": "none (discrete state, exact ==, matching HeCBench reference)",
+    "min_decision_margin_non_saturated": {"512": 1.054e-5, "1024": 5.493e-7, "2048": 5.493e-7},
+    "cpu_verified_sizes": [[64,64],[34,22],[2,2],[6,4],[100,2],[256,256],[1024,1024]],
+    "gpu_verified_sizes": [[64,64],[34,22],[2,2],[6,4],[100,2],[256,256],[512,512],[1024,1024],[2048,2048],[5120,5120]],
+    "all_pass": true
+  },
+  "timing_scope": "enqueue of niters full updates (black pass + white pass) + one device sync; median of repeat samples; copies/alloc/verify excluded",
+  "warmup": 10,
+  "reps": 5,
+  "machine": {
+    "cpu": "Intel Xeon W-2175, 14 cores / 28 threads",
+    "gpu": "NVIDIA Quadro GV100 32GB, Volta sm_70",
+    "driver": "555.52.04",
+    "cuda": "12.5 (V12.5.82)",
+    "os": "Ubuntu 24.04",
+    "gcc": "13.2.0",
+    "omp_threads": 28,
+    "gpu_visible_devices": 1,
+    "note": "rosi_v100 unreachable; GV100 used (same sm_70 generation); device 3 absent on fwk394"
+  },
+  "gpu": [
+    {"lattice": [512,512], "warmup": 10, "niters": 200, "alpaka_us_samples": [1636.219,1636.317,1634.858,1620.742,1613.533], "alpaka_us_median": 1634.858, "ref_us_samples": [1586.0,1584.0,1580.0,1587.0,1588.0], "ref_us_median": 1586.0, "ratio": 1.031, "validation": "PASS"},
+    {"lattice": [1024,1024], "warmup": 10, "niters": 200, "alpaka_us_samples": [3903.554,3903.546,3859.093], "alpaka_us_median": 3903.5, "ref_us_samples": [3793.0,3721.0,3626.0], "ref_us_median": 3721.0, "ratio": 1.049, "validation": "PASS"},
+    {"lattice": [2048,2048], "warmup": 20, "niters": 200, "alpaka_us_samples": [14931.951,14421.693,14437.863], "alpaka_us_median": 14437.9, "ref_us_samples": [14044.0,13961.0,14034.0], "ref_us_median": 14034.0, "ratio": 1.029, "validation": "PASS"},
+    {"lattice": [5120,5120], "warmup": 100, "niters": 1000, "alpaka_us_samples": [375430.770,365813.330,366540.931,366688.242,367431.869], "alpaka_us_median": 366688.2, "ref_us_samples": [363499.0,344605.0,344658.0], "ref_us_median": 344658.0, "ratio": 1.064, "validation": "PASS"}
+  ],
+  "cpu": [
+    {"lattice": [1024,1024], "warmup": 10, "niters": 200, "backend": "CpuOmpBlocks", "alpaka_us_median": 214270.8, "ref_us_samples": [8911013.0,620501.0,645113.0,621553.0,626398.0], "ref_us_median": 626398.0, "ratio": 0.342, "validation": "PASS"}
+  ],
+  "repro_commands": {
+    "cpu_build": "cmake --preset rel-host-cpu-gcc -Dalpaka_COMPILE_PEDANTIC=ON . && cmake --build build/rel-host-cpu-gcc --target ising_alpaka -j",
+    "cuda_build": "export PATH=/usr/local/cuda/bin:$PATH CUDA_HOME=/usr/local/cuda; cmake --preset rel-cuda-nvcc-gcc -DCMAKE_CUDA_ARCHITECTURES=70 -Dalpaka_COMPILE_PEDANTIC=ON . && cmake --build build/rel-cuda-nvcc-gcc --target ising_alpaka -j",
+    "cpu_run": "OMP_NUM_THREADS=28 ./build/rel-host-cpu-gcc/benchmark/ising/ising_alpaka --lattice-n 1024 --lattice-m 1024 --nwarmup 10 --niters 200 --repeat 5",
+    "gpu_run": "CUDA_VISIBLE_DEVICES=1 ./build/rel-cuda-nvcc-gcc/benchmark/ising/ising_alpaka --lattice-n 5120 --lattice-m 5120 --nwarmup 100 --niters 1000 --repeat 5",
+    "cuda_ref": "nvcc -std=c++17 -Xcompiler -Wall -arch=sm_70 -O3 src/ising-cuda/main.cu -o ising_cuda_ref && ./ising_cuda_ref -x 5120 -y 5120 -w 100 -n 1000",
+    "omp_ref": "g++ -O2 -fopenmp -std=c++17 -I src/ising-cuda src/ising-omp/main.cpp -o ising_omp_ref && OMP_NUM_THREADS=28 ./ising_omp_ref -x 1024 -y 1024 -w 10 -n 200"
+  }
+}
