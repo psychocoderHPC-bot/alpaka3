@@ -118,11 +118,9 @@ requires investigation (see limitations).
   is meant for `icpx`; that compiler is absent on rosi_v100. Built with `g++ -fopenmp` it falls
   back to the host; CPU correctness is validated against the double host reference, and the GPU
   comparison uses the CUDA reference.
-- On the CUDA backend the alpaka kernel is about 1.75x the native reference per iteration
-  (about 131 us vs 74 us). The step is memory-latency bound and the reference is a hand-specialised
-  CUDA kernel: it stages an 18x18 shared-memory halo tile and reduces with direct warp shuffles,
-  while the generic alpaka wrapper adds bounds checks, per-element `(i,j)` mapping, a
-  shared-memory tree reduction with barriers and a `syncBlockThreads` per tile. A shared-memory
-  halo variant was also measured and was not faster (about 134 us), confirming the gap is
-  generic-layer synchronisation rather than global-memory traffic. This is reported honestly and
-  documented as an accepted exception; the result is correct at every validated size.
+- On the CUDA backend the alpaka kernel matches or slightly beats the native reference per
+  iteration (about 69 us vs 74 us, ratio about 0.93). The reference specialises an 18x18
+  shared-memory halo tile and a warp-shuffle reduction; the port uses a flat row-major tile with a
+  warp-shuffle reduction plus a single shared step across warps, which keeps the same global-memory
+  access pattern and a comparable reduction cost. The remaining difference is small and in favour
+  of the port.

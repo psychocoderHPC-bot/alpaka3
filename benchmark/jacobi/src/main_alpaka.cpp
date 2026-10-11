@@ -100,19 +100,34 @@ namespace jacobiAlpaka
                     }
                 }
 
-                // Portable block reduction over shared memory. The tree form works for any thread
-                // count, not only powers of two.
-                shared[tid] = blockErr;
-                onAcc::syncBlockThreads(acc);
-                for(uint32_t stride = 1u; stride < numThreads; stride <<= 1u)
+                // Block reduction: shuffle within each warp, then one shared-memory reduce across
+                // the per-warp partial sums. This uses very few barriers, matching the reference.
+                uint32_t const warpSize = onAcc::warp::getSize(acc);
+                for(uint32_t d = warpSize / 2u; d > 0u; d >>= 1u)
+                    blockErr += onAcc::warp::shflDown(acc, blockErr, d);
+                if(warpSize >= numThreads)
                 {
-                    if((tid % (2u * stride)) == 0u && tid + stride < numThreads)
-                        shared[tid] += shared[tid + stride];
+                    if(tid == 0u)
+                        alpaka::onAcc::atomicAdd(acc, error.data(), blockErr);
+                }
+                else
+                {
+                    uint32_t const lane = onAcc::warp::getLaneIdx(acc);
+                    uint32_t const warp = tid / warpSize;
+                    if(lane == 0u)
+                        shared[warp] = blockErr;
+                    onAcc::syncBlockThreads(acc);
+                    uint32_t const numWarps = numThreads / warpSize;
+                    if(tid < warpSize)
+                    {
+                        float v = (tid < numWarps) ? shared[tid] : 0.f;
+                        for(uint32_t d = warpSize / 2u; d > 0u; d >>= 1u)
+                            v += onAcc::warp::shflDown(acc, v, d);
+                        if(tid == 0u)
+                            alpaka::onAcc::atomicAdd(acc, error.data(), v);
+                    }
                     onAcc::syncBlockThreads(acc);
                 }
-                if(tid == 0u)
-                    alpaka::onAcc::atomicAdd(acc, error.data(), shared[0]);
-                onAcc::syncBlockThreads(acc);
             }
         }
     };
