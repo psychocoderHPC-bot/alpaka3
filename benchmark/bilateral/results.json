@@ -1,0 +1,55 @@
+{
+  "benchmark": "bilateral",
+  "workdir": "/tmp/alpaka3-bilateral-issue-bilateral-1b7l5P",
+  "branch": "benchmark/bilateral",
+  "base_sha": "6f13700c390a09df818a255d53e730f1f9d69456",
+  "commit_sha": "df69e2f421237ebd6a5269136c36627188340f2c",
+  "hecbench_sha": "0a17ee47ca6072192101036d4bf292e6612f22e6",
+  "changed_paths": [
+    "benchmark/CMakeLists.txt",
+    "benchmark/bilateral/CMakeLists.txt",
+    "benchmark/bilateral/README.md",
+    "benchmark/bilateral/src/helper.hpp",
+    "benchmark/bilateral/src/main_alpaka.cpp",
+    "benchmark/bilateral/src/misc.hpp"
+  ],
+  "host": {
+    "target": "fwk394",
+    "cpu": "Intel Xeon W-2175 (14C/28T)",
+    "gpu": "Quadro GV100 (SM 7.0, 32 GiB)",
+    "driver": "555.52.04",
+    "cuda": "12.5.82",
+    "gcc": "13.2.0",
+    "rosi_v100": "gateway connected but unreachable (all exec/session calls failed)"
+  },
+  "validation": {
+    "tolerance": 1e-3,
+    "tolerance_rationale": "pinned harness threshold for identical single-precision reduction over up to 361 terms magnitude<=255, normalisation ~0.5; observed max|diff| <= 9.2e-5",
+    "nan_inf_checks": true,
+    "zero_normalisation_checks": true,
+    "sizes": ["4x4","10x11","20x21","33x17","64x48","512x512","1024x1024","1920x1080","2960x1440"],
+    "radii": [3,6,9],
+    "extra_runtime_radius": 5,
+    "cpu_ctest": "PASS (128x96 verify-only)",
+    "cuda_ctest": "PASS (128x96 verify-only)",
+    "cpu_full_2960x1440": "PASS",
+    "cuda_full_2960x1440": "PASS"
+  },
+  "timing_scope": "repeat filter passes enqueued back to back between two device syncs, divided by repeat; input generation, host reference and validation excluded; 1 warm-up pass",
+  "acceptance_metric": "median per-pass kernel time; runtime ratio = median_alpaka / median_reference",
+  "gpu_ratios": {
+    "2960x1440_R3": 1.0386,
+    "2960x1440_R6": 1.0139,
+    "2960x1440_R9": 1.0205,
+    "1920x1080_R3": 1.0094,
+    "1920x1080_R6": 0.9930,
+    "1920x1080_R9": 0.9761,
+    "1024x1024_R3": 1.0253,
+    "1024x1024_R6": 1.0126,
+    "1024x1024_R9": 1.0184
+  },
+  "reference_builds": {
+    "cuda": "nvcc -std=c++17 -Xcompiler -fopenmp -Xcompiler -Wall -arch=sm_70 -O3 main.cu -o bilateral_cuda_ref",
+    "omp": "g++ -O2 -fopenmp -std=c++17 main.cpp -o bilateral_omp_ref"
+  }
+}
