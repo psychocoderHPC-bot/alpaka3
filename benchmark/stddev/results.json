@@ -1,0 +1,190 @@
+{
+  "benchmark": "stddev",
+  "hecbench_sha": "0a17ee47ca6072192101036d4bf292e6612f22e6",
+  "alpaka_base_sha": "6f13700c390a09df818a255d53e730f1f9d69456",
+  "reference": {
+    "cuda_source": "src/stddev-cuda/main.cu",
+    "cuda_source_license": "Apache-2.0, Copyright (c) 2018-2020, NVIDIA CORPORATION, derived from rapidsai/raft",
+    "omp_source": "src/stddev-omp/main.cpp",
+    "shared_header": "src/stddev-cuda/reference.h",
+    "readme_line": 1692,
+    "benchmarks_yaml_args": [
+      "65536",
+      "16384",
+      "100"
+    ],
+    "cuda_ref_build": "nvcc -std=c++17 -Xcompiler -Wall -arch=sm_70 -O3 -use_fast_math main.cu -o stddev_cuda_ref",
+    "omp_ref_build": "g++ -O2 -fopenmp -std=c++17 -Wall main.cpp -I. -o stddev_omp_ref",
+    "omp_ref_usable_as_baseline": false,
+    "omp_ref_note": "OpenMP target-offload program; g++ host fallback prints a timing then FAIL, so it is neither a correctness nor a performance baseline"
+  },
+  "model": {
+    "gpu": "Tesla V100-SXM2-32GB",
+    "cpu": "rosi_v100 node, g++ 13.2",
+    "cuda": "12.6",
+    "arch": "sm_70"
+  },
+  "timing_scope": "per-pipeline kernel time: repeat back-to-back memset+sop+normalise pipelines between two synchronisations, divided by repeat; warmup excluded; result copy and host oracle outside timed region",
+  "warmup": 1,
+  "reference_samples_us": {
+    "4096x4096": [
+      94.0,
+      94.0,
+      94.0,
+      94.0,
+      94.0
+    ],
+    "1024x65536": [
+      400.0,
+      400.0,
+      400.0,
+      400.0,
+      400.0
+    ],
+    "65536x16384": [
+      6119.0
+    ]
+  },
+  "reference_median_us": {
+    "4096x4096": 94.0,
+    "1024x65536": 400.0,
+    "65536x16384": 6119.0
+  },
+  "alpaka_gpu": [
+    {
+      "config": "4096x4096",
+      "backend": "cuda",
+      "precision": "float",
+      "validation": "PASS",
+      "rowSplits": 256,
+      "targetWorkers": 1048576,
+      "samples": 7,
+      "raw_samples_s": [
+        0.000101221,
+        0.000100959,
+        0.000101041,
+        0.000100729,
+        0.000100746,
+        0.000100696,
+        0.000100814
+      ],
+      "median_us": 100.814,
+      "min_us": 100.696,
+      "max_us": 101.221,
+      "variation": 0.005,
+      "ref_median_us": 94.0,
+      "ratio": 1.072
+    },
+    {
+      "config": "4096x4096",
+      "backend": "cuda",
+      "precision": "float",
+      "validation": "PASS",
+      "rowSplits": 256,
+      "samples": 7,
+      "raw_samples_note": "second independent run; median/min/max measured, individual samples not captured",
+      "median_us": 99.725,
+      "min_us": 99.474,
+      "max_us": 99.983,
+      "variation": 0.005,
+      "ref_median_us": 94.0,
+      "ratio": 1.061
+    },
+    {
+      "config": "1024x65536",
+      "backend": "cuda",
+      "precision": "float",
+      "validation": "PASS",
+      "rowSplits": 1024,
+      "targetWorkers": 1048576,
+      "samples": 7,
+      "raw_samples_s": [
+        0.000331778,
+        0.000331782,
+        0.000330312,
+        0.000329735,
+        0.000329471,
+        0.000330012,
+        0.000329469
+      ],
+      "median_us": 330.012,
+      "min_us": 329.469,
+      "max_us": 331.782,
+      "variation": 0.007,
+      "ref_median_us": 400.0,
+      "ratio": 0.825
+    },
+    {
+      "config": "65536x16384",
+      "backend": "cuda",
+      "precision": "float",
+      "validation": "PASS",
+      "rowSplits": 16,
+      "targetWorkers": 1048576,
+      "samples": 7,
+      "raw_samples_s": [
+        0.005366273,
+        0.005351399,
+        0.005350515,
+        0.005369508,
+        0.005350439,
+        0.005370398,
+        0.00535064
+      ],
+      "median_us": 5351.399,
+      "min_us": 5350.439,
+      "max_us": 5370.398,
+      "variation": 0.004,
+      "ref_median_us": 6119.0,
+      "ratio": 0.874
+    }
+  ],
+  "alpaka_cpu": [
+    {
+      "config": "4096x4096",
+      "backend": "host CpuOmpBlocks",
+      "threads": 8,
+      "precision": "float",
+      "validation": "PASS",
+      "samples": 5,
+      "median_us": 4672.9,
+      "min_us": 4662.6,
+      "max_us": 4695.3,
+      "variation": 0.007,
+      "note": "no usable reference baseline (see README limitations); indicative only"
+    }
+  ],
+  "validation_matrix_pass": {
+    "cuda_shapes": [
+      "320x97",
+      "1x2",
+      "31x4",
+      "33x4",
+      "255x17",
+      "257x65",
+      "1000x257",
+      "4096x4096",
+      "1024x65536",
+      "65536x16384"
+    ],
+    "cpu_shapes": [
+      "320x97",
+      "1x2",
+      "33x4",
+      "257x65",
+      "1000x257",
+      "4096x4096"
+    ],
+    "tolerance": "|got-ref| <= 1e-3 + 1e-3*|ref| with NaN/Inf rejection; absolute term equals the pinned reference's own 1e-3 acceptance"
+  },
+  "repro_commands": {
+    "cuda_ref": "export PATH=/usr/local/cuda-12.6/bin:$PATH CUDA_HOME=/usr/local/cuda-12.6; cd /root/stddev-ref-src; nvcc -std=c++17 -Xcompiler -Wall -arch=sm_70 -O3 -use_fast_math main.cu -o stddev_cuda_ref; CUDA_VISIBLE_DEVICES=3 ./stddev_cuda_ref 4096 4096 100",
+    "omp_ref": "cd /root/stddev-ref-src; g++ -O2 -fopenmp -std=c++17 -Wall main.cpp -I. -o stddev_omp_ref; OMP_NUM_THREADS=48 ./stddev_omp_ref 320 97 10",
+    "alpaka_cuda": "cmake --preset rel-cuda-nvcc-gcc -DCMAKE_CUDA_ARCHITECTURES=70 -Dalpaka_COMPILE_PEDANTIC=ON .; cmake --build build/rel-cuda-nvcc-gcc --target stddev_alpaka -j; CUDA_VISIBLE_DEVICES=3 ./build/rel-cuda-nvcc-gcc/benchmark/stddev/stddev_alpaka --D 4096 --N 4096 --repeat 100 --samples 7",
+    "alpaka_cpu": "cmake --preset rel-host-cpu-gcc -Dalpaka_COMPILE_PEDANTIC=ON .; cmake --build build/rel-host-cpu-gcc --target stddev_alpaka -j; OMP_NUM_THREADS=8 ./build/rel-host-cpu-gcc/benchmark/stddev/stddev_alpaka --D 4096 --N 4096 --repeat 50 --samples 7"
+  },
+  "reference_provenance_note": "reference sources kept outside the repository at /root/stddev-ref-src on rosi_v100",
+  "alpaka_commit_sha": "4d2b60ba2d473a82118003f4a14844d4391a1521",
+  "workdir": "/tmp/alpaka3-stddev-impl",
+  "branch": "benchmark/stddev"
+}
