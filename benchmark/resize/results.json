@@ -1,0 +1,70 @@
+{
+  "benchmark": "resize",
+  "impl": "alpaka3",
+  "branch": "benchmark/resize",
+  "base_sha": "6f13700c390a09df818a255d53e730f1f9d69456",
+  "commit": "d2ca97503da6615e0baa8d31660eb379dc457cfe",
+  "reference_provenance": {
+    "project": "ORNL/HeCBench",
+    "commit": "0a17ee47ca6072192101036d4bf292e6612f22e6",
+    "cuda_sources": {
+      "src/resize-cuda/main.cu": "9caba398942bd6517678f2d9029d4039dc1745cc",
+      "src/resize-cuda/Makefile": "b5f24dacd4f7bf54b4a3332925056ee68ad7f3bb",
+      "src/resize-cuda/CMakeLists.txt": "96733df62f391d015678083a3ecd832c030af70b"
+    },
+    "omp_source": "src/resize-omp/main.cpp",
+    "omp_source_blob": "94a0f2d105e42ebca67a9af860fda6500e17a2de",
+    "sycl_source": "src/resize-sycl/main.cpp",
+    "sycl_source_blob": "c6130b64a0ac625817d0e655123bd77d2430f8b4",
+    "upstream_license": "HeCBench BSD-3-Clause (Argonne National Laboratory, Zheming Jin); per-benchmark src/resize-*/LICENSE copy is Apache-2.0",
+    "alpaka_impl_license": "Apache-2.0"
+  },
+  "precision": "unsigned char / unsigned short / unsigned int (integer datapath, exact)",
+  "timing_scope": "repeat back-to-back kernel passes between two synchronisations, divided by repeat; 1 warm-up pass",
+  "warmup": 1,
+  "validation": "host reference recomputed in the same pixel type T reproducing the integer-division ratios, the swapped (o2i_fy,o2i_fx), the integer weight cast and the group-of-eight channel truncation; exact element comparison (tolerance 0); cross-checked element-for-element against the pinned CUDA reference binary",
+  "machine": {
+    "cpu": "AMD EPYC node fwk394 (28 cores)",
+    "gpu": "NVIDIA Quadro GV100 32GB (SM 7.0)",
+    "driver": "555.52.04",
+    "cuda": "12.5 (V12.5.82)",
+    "gcc": "13.2.0",
+    "cmake": "3.28.3",
+    "rosi_v100": "UNREACHABLE (B-ROSI); GPU evidence from fwk394 Quadro GV100 fallback"
+  },
+  "gpu_rows": [
+    {"mode": "nearest", "size": "1920x1080->256x256", "type": "u8", "reps": 7,
+     "raw_samples_us": [2419.2443, 338.0681, 209.2840, 209.6981, 2603.8669, 209.3722, 209.5202],
+     "median_us": 209.6981, "variation_relspread": 0.114192,
+     "reference_median_us": 222.1549, "ratio": 0.9439, "validation": "PASS"},
+    {"mode": "nearest", "size": "1920x1080->256x256", "type": "u16", "reps": 7,
+     "raw_samples_us": [414.1019, 653.7486, 413.9067, 415.0555, 411.4856, 414.9020, 415.1139],
+     "median_us": 414.9020, "variation_relspread": 0.005839,
+     "reference_median_us": 424.7341, "ratio": 0.9769, "validation": "PASS"},
+    {"mode": "nearest", "size": "1920x1080->256x256", "type": "u32", "reps": 7,
+     "raw_samples_us": [825.3913, 825.0495, 825.0076, 825.5579, 823.7817, 824.9401, 824.9771],
+     "median_us": 825.0076, "variation_relspread": 0.000022,
+     "reference_median_us": 834.6721, "ratio": 0.9884, "validation": "PASS"},
+    {"mode": "bilinear", "size": "1920x1080->256x256", "type": "u8", "reps": 7,
+     "raw_samples_us": [366.9372, 367.3557, 367.3039, 367.2150, 366.7901, 367.1635, 367.4282],
+     "median_us": 367.2150, "variation_relspread": 0.000017,
+     "reference_median_us": 385.8443, "ratio": 0.9517, "validation": "PASS"},
+    {"mode": "bilinear", "size": "1920x1080->256x256", "type": "u16", "reps": 7,
+     "raw_samples_us": [718.3300, 720.6152, 721.0505, 720.6329, 723.5320, 720.5068, 720.5743],
+     "median_us": 720.6152, "variation_relspread": 0.000072,
+     "reference_median_us": 731.7887, "ratio": 0.9847, "validation": "PASS"},
+    {"mode": "bilinear", "size": "1920x1080->256x256", "type": "u32", "reps": 7,
+     "raw_samples_us": [1441.7767, 1442.9715, 1442.3026, 1442.1999, 1441.0721, 1442.9382, 1443.2776],
+     "median_us": 1442.3026, "variation_relspread": 0.000015,
+     "reference_median_us": 1428.3005, "ratio": 1.0098, "validation": "PASS"}
+  ],
+  "cpu_note": "the OpenMP reference (omp target offload, num_teams(29184)) cannot be built usefully with g++ on fwk394, so CPU has no like-for-like runtime ratio; CPU correctness is validated against the exact host reference on both backends",
+  "repro_commands": {
+    "cpu_build": "cmake --preset rel-host-cpu-gcc -Dalpaka_COMPILE_PEDANTIC=ON . && cmake --build build/rel-host-cpu-gcc --target resize_alpaka -j",
+    "cuda_build": "export PATH=/usr/local/cuda-12.5/bin:$PATH CUDA_HOME=/usr/local/cuda-12.5; cmake --preset rel-cuda-nvcc-gcc -DCMAKE_CUDA_ARCHITECTURES=70 -Dalpaka_COMPILE_PEDANTIC=ON . && cmake --build build/rel-cuda-nvcc-gcc --target resize_alpaka -j",
+    "cpu_run": "OMP_NUM_THREADS=28 ./build/rel-host-cpu-gcc/benchmark/resize/resize_alpaka --in-width 1920 --in-height 1080 --out-width 256 --out-height 256 --channels 512 --repeat 20 --samples 5",
+    "cuda_run": "CUDA_VISIBLE_DEVICES=1 ./build/rel-cuda-nvcc-gcc/benchmark/resize/resize_alpaka --in-width 1920 --in-height 1080 --out-width 256 --out-height 256 --channels 512 --repeat 100 --samples 5",
+    "cuda_ref_build": "nvcc -std=c++17 -Xcompiler -Wall -arch=sm_70 -O3 main.cu -o resize_cuda_ref",
+    "cuda_ref_run": "./resize_cuda_ref 1920 1080 256 256 512 100"
+  }
+}
