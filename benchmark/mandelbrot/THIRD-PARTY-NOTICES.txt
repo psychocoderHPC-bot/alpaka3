@@ -1,0 +1,122 @@
+Third-party notices for the mandelbrot benchmark
+================================================
+
+This benchmark contains code derived from the HeCBench benchmark suite. The
+license texts below are reproduced as required by those licenses.
+
+The benchmark itself (`src/main_alpaka.cpp`, `src/misc.hpp`, the independent
+double-precision reference and the verification in `src/helper.hpp`) is
+Copyright 2026 René Widera, SPDX-License-Identifier: BSD-3-Clause. The
+`ComplexF` type and the `MandelParameters` row/column defaults, the scaling
+functions and the escape-time iteration in `src/helper.hpp` are copied from the
+HeCBench references and remain under the MIT license reproduced below.
+
+
+1. HeCBench
+-----------
+
+Repository: https://github.com/ORNL/HeCBench
+Pinned commit: 0a17ee47ca6072192101036d4bf292e6612f22e6
+Files used:
+  * src/mandelbrot-cuda/mandel.hpp  SHA 9382be88975fc856e255e0609044b41a75c43739
+  * src/mandelbrot-cuda/main.cu     SHA 0735959f663a4ab1f503ca4728aae6e74ad4dd44
+  * src/mandelbrot-cuda/common.hpp  SHA 0a756e491f904507870fe013a8c552d25c55ff88
+  * src/mandelbrot-omp/main.cpp     SHA 81f7b962e4fc5f5ecbb93cd7db24690c18732f68
+  * src/mandelbrot-omp/mandel.hpp   SHA 0dea8f7c2d60d31e9d72459102f22c429e89ada2
+  * src/mandelbrot-omp/util.hpp     SHA 01e061ffa0d2503a2c6d8f29c97a2882a6a0f9ed
+
+The HeCBench repository as a whole is distributed under the BSD 3-Clause
+license (it is not among the GPL-style benchmarks listed in the HeCBench
+README). The individual mandelbrot sources used here carry an explicit
+SPDX-License-Identifier: MIT header, Copyright (c) 2019 Intel Corporation, and
+are therefore covered by the MIT license reproduced in section 2.
+
+
+2. MIT license (mandelbrot sources)
+-----------------------------------
+
+//==============================================================
+// Copyright © 2019 Intel Corporation
+//
+// SPDX-License-Identifier: MIT
+// =============================================================
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+
+3. Original provenance: oneAPI-samples
+--------------------------------------
+
+The HeCBench README attributes the mandelbrot benchmark to the Intel
+oneAPI-samples `DirectProgramming` examples
+(https://github.com/oneapi-src/oneAPI-samples/tree/master/DirectProgramming).
+The corresponding oneAPI-samples `Mandelbrot` and `MandelbrotOMP` samples are
+Copyright 2019-2020 Intel Corporation and distributed under the same MIT
+license text as in section 2. The HeCBench `MandelParameters` iteration and
+scaling are a faithful port of those samples.
+
+
+Note on Rodinia
+---------------
+
+The mandelbrot benchmark is **not** part of the Rodinia suite. The HeCBench
+README associates Rodinia with a different set of benchmarks (backprop, bfs,
+b+tree, cfd, gaussian, heartwall, hotspot, hybridsort, kmeans, lavamd,
+leukocyte, lud, myocyte, nn, nw, particlefilter, pathfinder, srad, streamcluster
+and others); mandelbrot is attributed to oneAPI-samples only. No Rodinia
+license or attribution is required for this benchmark. The mandelbrot-specific
+attribution chain is HeCBench (MIT, Intel) <- oneAPI-samples (MIT, Intel).
+
+
+4. HeCBench repository license (BSD 3-Clause)
+---------------------------------------------
+
+Reproduced for completeness; the mandelbrot sources used here are MIT-licensed
+as stated above, but the surrounding repository license is:
+
+BSD 3-Clause License
+
+Copyright (c) 2020 ,       Argonne National Laboratory   (Zheming Jin)
+Copyright (c) 2020-,     Oak Ridge National Laboratory   (Zheming Jin)
+All rights reserved.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are met:
+
+1. Redistributions of source code must retain the above copyright notice, this
+   list of conditions and the following disclaimer.
+
+2. Redistributions in binary form must reproduce the above copyright notice,
+   this list of conditions and the following disclaimer in the documentation
+   and/or other materials provided with the distribution.
+
+3. Neither the name of the copyright holder nor the names of its
+   contributors may be used to endorse or promote products derived from
+   this software without specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.

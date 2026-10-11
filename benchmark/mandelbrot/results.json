@@ -1,0 +1,59 @@
+{
+  "benchmark": "mandelbrot",
+  "hecbench": {
+    "repo": "https://github.com/ORNL/HeCBench",
+    "commit": "0a17ee47ca6072192101036d4bf292e6612f22e6",
+    "source_files": {
+      "mandelbrot-cuda/main.cu": "0735959f663a4ab1f503ca4728aae6e74ad4dd44",
+      "mandelbrot-cuda/mandel.hpp": "9382be88975fc856e255e0609044b41a75c43739",
+      "mandelbrot-cuda/common.hpp": "0a756e491f904507870fe013a8c552d25c55ff88",
+      "mandelbrot-cuda/Makefile": "f3d970ebd868d9a0f9a90633e8504654311a6df0",
+      "mandelbrot-omp/main.cpp": "81f7b962e4fc5f5ecbb93cd7db24690c18732f68",
+      "mandelbrot-omp/mandel.hpp": "0dea8f7c2d60d31e9d72459102f22c429e89ada2",
+      "mandelbrot-omp/util.hpp": "01e061ffa0d2503a2c6d8f29c97a2882a6a0f9ed"
+    },
+    "license": "MIT (Intel oneAPI-samples derived)"
+  },
+  "alpaka": {
+    "base_commit": "6f13700c390a09df818a255d53e730f1f9d69456",
+    "branch": "benchmark/mandelbrot",
+    "commit": "2b26f5d990aead2fbf74b780682d28236af66c4d"
+  },
+  "sampling": "one discarded warm-up, then measured repetitions (repeat 200 GPU default, 120 GPU large, 3 CPU); reported value is the median.",
+  "timing_scope": "kernel enqueue + device synchronization only (host/device copies, references, allocation, verification excluded)",
+  "tolerance": {
+    "value": 0.05,
+    "rationale": "HeCBench Verify uses 0.05. The escape-time map is chaotic on the parabolic boundary; a float/double last-bit difference moves isolated boundary pixels. Measured float/double divergence worst case 0.0075, about 7x below the bound. Exact float comparison, finite/range guards and an exact deep-interior spot check pass independently."
+  },
+  "environment": {
+    "cpu": "rosi_v100 host 48-core EPYC, GCC 13.2, OMP_NUM_THREADS=48, alpaka backend CpuOmpBlocks",
+    "gpu": "rosi_v100: NVIDIA Tesla V100-SXM2-32GB, sm_70, CUDA 12.6, g++ 13.2, alpaka backend GpuCuda"
+  },
+  "reference_caveats": [
+    "The HeCBench OpenMP reference is an OpenMP-offload program whose host fallback only uses threads when a target is present; its host number is indicative, not a strict like-for-like CPU ratio.",
+    "The rosi_v100 node is shared (load average 30-50), so CPU timings vary run to run; GPU medians use a long warm-up and repeat>=120 to avoid the V100 clock ramp."
+  ],
+  "results": [
+    {"config": "1024x1024x1000", "geometry": "1024x1024", "max_iter": 1000, "data_type": "float", "backend": "GpuCuda", "platform": "gpu", "alpaka_median_us": 493.0, "reference_median_us": 497.4, "reference": "HeCBench CUDA mandelbrot-cuda", "ratio_alpaka_over_ref": 0.991, "variation_pct": 0.4, "validation": "PASSED"},
+    {"config": "1080x1920x1000", "geometry": "1080x1920", "max_iter": 1000, "data_type": "float", "backend": "GpuCuda", "platform": "gpu", "alpaka_median_us": 928.0, "reference_median_us": 910.7, "reference": "HeCBench CUDA mandelbrot-cuda (max_iter patched to 1000)", "ratio_alpaka_over_ref": 1.019, "variation_pct": 0.0, "validation": "PASSED"},
+    {"config": "1024x1024x1000", "geometry": "1024x1024", "max_iter": 1000, "data_type": "float", "backend": "CpuOmpBlocks", "platform": "cpu", "alpaka_median_us": 68739.9, "reference_median_us": 73840.0, "reference": "HeCBench OMP mandelbrot-omp (geometry patched to 1024x1024x1000)", "ratio_alpaka_over_ref": 0.931, "variation_pct": 2.9, "validation": "PASSED"}
+  ],
+  "verification": {
+    "faithful_float_reference": "GPU boundary-pixel FMA differences only (4702/1048576), CPU 0 mismatches; both within tolerance",
+    "independent_double_reference": {
+      "1024x1024x1000": 0.0050,
+      "1080x1920x1000": 0.0068,
+      "1080x1920x100": 0.0014
+    },
+    "interior_spot_check": "4096 deep-interior points, exact",
+    "finite_and_range_guards": "PASSED (device image poisoned with NaN before the kernel)"
+  },
+  "repro_commands": [
+    "cmake --preset rel-host-cpu-gcc -Dalpaka_COMPILE_PEDANTIC=ON .",
+    "cmake --build build/rel-host-cpu-gcc --target mandelbrot_alpaka -j",
+    "OMP_NUM_THREADS=48 ./build/rel-host-cpu-gcc/benchmark/mandelbrot/mandelbrot_alpaka --rows 1024 --cols 1024 --max-iter 1000 --repeat 5",
+    "cmake --preset rel-cuda-nvcc-gcc -DCMAKE_CUDA_ARCHITECTURES=70 -Dalpaka_COMPILE_PEDANTIC=ON .",
+    "cmake --build build/rel-cuda-nvcc-gcc --target mandelbrot_alpaka -j",
+    "CUDA_VISIBLE_DEVICES=1 ./build/rel-cuda-nvcc-gcc/benchmark/mandelbrot/mandelbrot_alpaka --rows 1024 --cols 1024 --max-iter 1000 --repeat 200"
+  ]
+}
