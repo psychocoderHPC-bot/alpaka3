@@ -12,7 +12,6 @@
 #include <vector>
 constexpr uint32_t numberOfBins = 1024;
 constexpr uint32_t numberOfElements = 8 * 1024 * 1024;
-constexpr uint32_t blockSize = 1024;
 
 // Function to validate the histogram
 bool validateHistogram(auto const& histogram, int32_t const expectedValue)
@@ -47,6 +46,21 @@ bool validateHistogram(auto const& histogram, int32_t const expectedValue)
     return isValid;
 }
 
+//! Linear thread index within the current thread block, in the range
+//! [0, threads-in-block). Portable across accelerators because it only relies
+//! on the block/thread layer of the current execution.
+template<typename T_Acc>
+ALPAKA_FN_ACC uint32_t threadIdInBlock(T_Acc const& acc)
+{
+    uint32_t id = 0;
+    constexpr auto tInBlock = alpaka::onAcc::range::threadsInBlock;
+    for(auto idx : alpaka::onAcc::makeIdxMap(acc, alpaka::onAcc::worker::threadsInBlock, tInBlock))
+    {
+        id = static_cast<uint32_t>(idx);
+    }
+    return id;
+}
+
 //! Kernel to generate random numbers and fill the histogram
 //! This kernel uses a uniform random integer generator and uses a bit manipulator-scaler to generate uniform float
 //! random numbers in the range [0, 1). The generated random numbers are then scaled to fit into the histogram bins.
@@ -76,6 +90,16 @@ struct RandomInitKernelUniform
             auto workGroup = alpaka::onAcc::WorkerGroup{seedVec, numThreadGroups};
 
             // Iterate over the workgroup
+            constexpr auto tInBlock = alpaka::onAcc::range::threadsInBlock;
+            auto const numThreadsInBlock = tInBlock.getIdxRange(acc).distance();
+            auto localBins = alpaka::onAcc::declareSharedMdArray<uint32_t, alpaka::uniqueId()>(
+                acc,
+                alpaka::CVec<uint32_t, numberOfBins>{});
+            uint32_t const tId = threadIdInBlock(acc);
+            for(uint32_t b = tId; b < numberOfBins; b += numThreadsInBlock.x())
+                localBins[b] = uint32_t{0};
+            alpaka::onAcc::syncBlockThreads(acc);
+
             for([[maybe_unused]] auto [index] : alpaka::onAcc::makeIdxMap(acc, workGroup, alpaka::IdxRange{size}))
             {
                 // Generate numbers in [0,1). Philox engine already generates uniform random numbers but they are
@@ -89,9 +113,18 @@ struct RandomInitKernelUniform
                 // Since the values are in [0,1), we multiply by the number of bins to get the bin index
                 // The bin index is in the range [0, numberOfBins)
                 uint32_t binIndex = val * numberOfBins;
-                // Atomically increment the bin count in the histogram
-                alpaka::onAcc::atomicAdd(acc, &outBins[binIndex], uint32_t{1});
+                // Accumulate in the block-local shared histogram
+                alpaka::onAcc::atomicAdd(
+                    acc,
+                    &localBins[binIndex],
+                    uint32_t{1},
+                    alpaka::onAcc::scope::Block{});
             }
+
+            alpaka::onAcc::syncBlockThreads(acc);
+            for(uint32_t b = tId; b < numberOfBins; b += numThreadsInBlock.x())
+                if(localBins[b] != 0)
+                    alpaka::onAcc::atomicAdd(acc, &outBins[b], localBins[b]);
         }
     }
 };
@@ -121,6 +154,16 @@ struct RandomInitKernel
 
 
             // Iterate over the workgroup
+            constexpr auto tInBlock = alpaka::onAcc::range::threadsInBlock;
+            auto const numThreadsInBlock = tInBlock.getIdxRange(acc).distance();
+            auto localBins = alpaka::onAcc::declareSharedMdArray<uint32_t, alpaka::uniqueId()>(
+                acc,
+                alpaka::CVec<uint32_t, numberOfBins>{});
+            uint32_t const tId = threadIdInBlock(acc);
+            for(uint32_t b = tId; b < numberOfBins; b += numThreadsInBlock.x())
+                localBins[b] = uint32_t{0};
+            alpaka::onAcc::syncBlockThreads(acc);
+
             for([[maybe_unused]] auto [index] : alpaka::onAcc::makeIdxMap(acc, workGroup, alpaka::IdxRange{size}))
             {
                 // Generate a random 32-bit unsigned integer
@@ -128,9 +171,18 @@ struct RandomInitKernel
                 // Calculate the bin index for the histogram
                 auto binIndex = (val % numberOfBins);
 
-                // Atomically increment the bin count in the histogram
-                alpaka::onAcc::atomicAdd(acc, &outBins[binIndex], uint32_t{1});
+                // Accumulate in the block-local shared histogram
+                alpaka::onAcc::atomicAdd(
+                    acc,
+                    &localBins[binIndex],
+                    uint32_t{1},
+                    alpaka::onAcc::scope::Block{});
             }
+
+            alpaka::onAcc::syncBlockThreads(acc);
+            for(uint32_t b = tId; b < numberOfBins; b += numThreadsInBlock.x())
+                if(localBins[b] != 0)
+                    alpaka::onAcc::atomicAdd(acc, &outBins[b], localBins[b]);
         }
     }
 };
@@ -146,6 +198,16 @@ struct RandomInitKernelVec
     //! @param size is the number of elements to process
     ALPAKA_FN_ACC void operator()(auto const& acc, auto outBins, uint32_t size) const
     {
+        constexpr auto tInBlock = alpaka::onAcc::range::threadsInBlock;
+        auto const numThreadsInBlock = tInBlock.getIdxRange(acc).distance();
+        auto localBins = alpaka::onAcc::declareSharedMdArray<uint32_t, alpaka::uniqueId()>(
+            acc,
+            alpaka::CVec<uint32_t, numberOfBins>{});
+        uint32_t const tId = threadIdInBlock(acc);
+        for(uint32_t b = tId; b < numberOfBins; b += numThreadsInBlock.x())
+            localBins[b] = uint32_t{0};
+        alpaka::onAcc::syncBlockThreads(acc);
+
         // Generate random values for each element in the buffer.
         for(auto [index] :
             alpaka::onAcc::makeIdxMap(acc, alpaka::onAcc::worker::threadsInGrid, alpaka::IdxRange{size}))
@@ -166,9 +228,18 @@ struct RandomInitKernelVec
             // Calculate the bin index for the histogram
             auto binIndex = static_cast<uint32_t>(val % numberOfBins);
 
-            // Atomically increment the bin count in the histogram
-            alpaka::onAcc::atomicAdd(acc, &outBins[binIndex], uint32_t{1});
+            // Accumulate in the block-local shared histogram
+            alpaka::onAcc::atomicAdd(
+                acc,
+                &localBins[binIndex],
+                uint32_t{1},
+                alpaka::onAcc::scope::Block{});
         }
+
+        alpaka::onAcc::syncBlockThreads(acc);
+        for(uint32_t b = tId; b < numberOfBins; b += numThreadsInBlock.x())
+            if(localBins[b] != 0)
+                alpaka::onAcc::atomicAdd(acc, &outBins[b], localBins[b]);
     }
 };
 
@@ -204,7 +275,7 @@ bool testRandomInitKernels(
     // Frame size
 
     // Launch the 1-dimensional kernel with scalar size
-    auto frameSpec = alpaka::onHost::getFrameSpec(device, computeExec, alpaka::Vec{blockSize});
+    auto frameSpec = alpaka::onHost::getFrameSpec(device, computeExec, alpaka::Vec{size});
 
     // TEST - 1: Philox Generator generates integer random numbers
     std::cout << "- Testing RandomInitKernel with a grid of " << frameSpec << "\n";
