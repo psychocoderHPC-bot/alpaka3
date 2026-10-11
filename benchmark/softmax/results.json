@@ -1,0 +1,49 @@
+{
+  "benchmark": "softmax",
+  "impl": "alpaka3",
+  "branch": "benchmark/softmax",
+  "base_sha": "6f13700c390a09df818a255d53e730f1f9d69456",
+  "commit": "7ef902bde34fe48633b867192d1877e8712d3040",
+  "reference_provenance": {
+    "project": "ORNL/HeCBench",
+    "commit": "0a17ee47ca6072192101036d4bf292e6612f22e6",
+    "cuda_sources": {
+      "src/softmax-cuda/main.cu": "5bb28c61d0778280f7a5ca9f337bf21d67791c3a"
+    },
+    "omp_sources": {
+      "src/softmax-omp/main.cpp": "6c813ab25fa0772bfebbc920f8807b40a05d5b18"
+    },
+    "measured_variant": "softMax (implementation 0, naive, one thread per row)",
+    "upstream_license": "HeCBench BSD-3-Clause (Argonne National Laboratory, Zheming Jin)",
+    "alpaka_impl_license": "BSD-3-Clause"
+  },
+  "precision": "float input; independent double host reference",
+  "timing_scope": "kernel enqueue + one device sync; median of repeat samples; allocation, copies and reference computation excluded; 1 warm-up iteration",
+  "warmup": 1,
+  "validation": "independent double-precision row-wise host reference re-derived from the stored inputs; absolute tolerance 1e-3 (HeCBench's own check fabsf(output_cpu-output_gpu) > 1e-3) plus 1e-4*|ref| relative term; FP64 uses 1e-9; NaN/Inf rejected",
+  "machine": {
+    "target": "rosi_v100",
+    "hostname": "gv016",
+    "gpu": "4x Tesla V100-SXM2-32GB (SM 7.0), CUDA 12.6 (V12.6.85)",
+    "cpu": "V100 host, g++ 13.2.0, cmake 3.28.3",
+    "gpu_visible_devices": 0,
+    "note": "rosi_v100 was reachable for the whole softmax run"
+  },
+  "rows": [
+    {"config": "100000x784", "backend": "cuda", "reps": 3, "run_medians_us": [53213.048, 53241.283, 53266.165], "median_us": 53241.283, "reference_median_us": 55552.0, "ratio": 0.958, "variation_relspread": 0.001, "validation": "PASS"},
+    {"config": "10000x1024", "backend": "cuda", "reps": 3, "run_medians_us": [774.154, 774.087, 776.947], "median_us": 774.154, "reference_median_us": 774.4, "ratio": 1.000, "variation_relspread": 0.004, "validation": "PASS"},
+    {"config": "100000x100", "backend": "cuda", "reps": 3, "run_medians_us": [4786.034, 4743.491, 4774.606], "median_us": 4774.606, "reference_median_us": 4761.9, "ratio": 1.003, "variation_relspread": 0.009, "validation": "PASS"},
+    {"config": "1000000x16", "backend": "cuda", "reps": 3, "run_medians_us": [497.120, 495.646, 495.205], "median_us": 495.646, "reference_median_us": 651.5, "ratio": 0.761, "variation_relspread": 0.004, "validation": "PASS"},
+    {"config": "100000x784", "backend": "hostcpu_omp16", "reps": 2, "run_medians_us": [48288.351, 48206.274], "median_us": 48288.351, "reference_median_us": 48494.0, "ratio": 0.996, "variation_relspread": 0.002, "validation": "PASS"}
+  ],
+  "reference_commands": {
+    "cuda_ref": "nvcc -std=c++17 -Xcompiler -Wall -arch=sm_70 -O3 --use_fast_math src/softmax-cuda/main.cu -o softmax_cuda_ref; ./softmax_cuda_ref 100000 784 0 100",
+    "omp_ref": "g++ -O2 -fopenmp -std=c++17 -ffast-math src/softmax-omp/main.cpp -o softmax_omp_ref"
+  },
+  "repro_commands": {
+    "cpu_build": "cmake --preset rel-host-cpu-gcc -Dalpaka_COMPILE_PEDANTIC=ON . && cmake --build build/rel-host-cpu-gcc --target softmax_alpaka -j",
+    "cuda_build": "cmake --preset rel-cuda-nvcc-gcc -Dalpaka_COMPILE_PEDANTIC=ON -DCMAKE_CUDA_ARCHITECTURES=70 . && cmake --build build/rel-cuda-nvcc-gcc --target softmax_alpaka -j",
+    "cpu_run": "./build/rel-host-cpu-gcc/benchmark/softmax/softmax_alpaka --size 100000 --slice-size 784 --repeat 5",
+    "cuda_run": "CUDA_VISIBLE_DEVICES=0 ./build/rel-cuda-nvcc-gcc/benchmark/softmax/softmax_alpaka --size 100000 --slice-size 784 --repeat 100"
+  }
+}
