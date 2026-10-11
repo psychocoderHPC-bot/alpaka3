@@ -9,9 +9,9 @@
  *
  * The pinned HeCBench reference (`src/morphology-cuda/main.cu` + `morphology.cu`, and its OpenMP twin
  * `src/morphology-omp/main.cpp` + `morphology.cpp`) runs a 2D separable morphological dilation and
- * erosion with a rectangular structuring element. The accelerator implementation is the van
- * Herk/Gil-Werman (vHGW) algorithm, which is O(1) per output element and independent of the
- * structuring-element size.
+ * erosion with a rectangular structuring element. The HeCBench accelerator reference (its own
+ * `.cu`/`.cpp` kernels, not this repository's port) implements the van Herk/Gil-Werman (vHGW)
+ * algorithm, which is O(1) per output element and independent of the structuring-element size.
  *
  * This file contains a straightforward, deliberately different O(size) host implementation: for
  * every output cell it scans the full structuring-element window `[c-L, c+R]` (horizontal) and

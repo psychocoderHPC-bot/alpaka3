@@ -1,0 +1,57 @@
+{
+  "benchmark": "morphology",
+  "what": "2D separable morphological dilation and erosion with a rectangular structuring element (uint8, exact min/max datapath).",
+  "hecbench": {
+    "repo": "https://github.com/ORNL/HeCBench",
+    "commit": "0a17ee47ca6072192101036d4bf292e6612f22e6",
+    "source_files": {
+      "morphology-cuda/main.cu": "f6f0e8829ff5b05f0da8d6009637e41b031964da",
+      "morphology-cuda/morphology.cu": "7ae013891c83bcfea0227572309e29f62c27faef",
+      "morphology-cuda/morphology.h": "9d5c87995b8a5408b2a04095eb1cfbfc4e6e4471",
+      "morphology-omp/main.cpp": "8203b6bb999b3956246488cbeb2582943384ecb9",
+      "morphology-omp/morphology.cpp": "9f8fe8803ca92d7b31170df0078680b7cc5c7cbe",
+      "morphology-omp/morphology.h": "c5d0df4522526a635c0a91e4ed323540b509ea91"
+    },
+    "license": "BSD-3-Clause (ORNL); the vendored morphology-{cuda,omp} subdirectories also carry the original CUDA-Morphology GPL-3.0 LICENSE"
+  },
+  "alpaka": {
+    "base_commit": "6f13700c390a09df818a255d53e730f1f9d69456",
+    "branch": "benchmark/morphology",
+    "measured_commit": "94e2ead26703f0caca78c09995e0e383aa27e0bc",
+    "note": "ratios and samples below were gathered at measured_commit; the license/comment/deque-sizing fix does not change the measured kernel behavior on uint8 inputs"
+  },
+  "tolerance": {
+    "datapath": "integer min/max, no floating point",
+    "comparison": "exact byte comparison against the independent O(size-per-output) host oracle; tolerance 0",
+    "reference_report_line": "reproduced: sum(image) == 255 -> PASS/FAIL (informational)"
+  },
+  "environment": {
+    "cpu": "rosi_v100 host: Intel Xeon Gold 6136 @3.00GHz, 48 threads, g++ 13.2, -O3, -Dalpaka_COMPILE_PEDANTIC=ON",
+    "gpu": "rosi_v100: NVIDIA Tesla V100-SXM2-32GB (CUDA_VISIBLE_DEVICES=3), sm_70, CUDA 12.6, nvcc 12.6, -Dalpaka_COMPILE_PEDANTIC=ON"
+  },
+  "timing_scope": "per-operation (one dilation or one erosion = one horizontal + one vertical pass, including the per-operation intermediate-buffer memset)",
+  "sampling": "one discarded warm-up pair, then --samples measured samples; reported value is the median; ratio = median_alpaka / median_reference",
+  "results": [
+    {"config": "999x777", "hsize": 71, "vsize": 71, "backend": "GpuCuda", "platform": "gpu", "alpaka_median_us": 57.9786, "variation_rel": 0.0016, "reference_median_us": 83.5, "ratio_alpaka_over_ref": 0.694, "raw_samples_us": [68.1388, 57.9786, 57.6605, 57.9361, 68.4662], "validation": "PASS", "repro": "morphology_alpaka --width 999 --height 777 --hsize 71 --vsize 71 --repeat 100 --samples 5 --seed 12345"},
+    {"config": "999x777", "hsize": 32, "vsize": 32, "backend": "GpuCuda", "platform": "gpu", "alpaka_median_us": 47.5447, "variation_rel": 0.0073, "reference_median_us": 95.0, "ratio_alpaka_over_ref": 0.500, "raw_samples_us": [47.5639, 47.5447, 47.3707, 47.42, 47.55], "validation": "PASS", "repro": "morphology_alpaka --width 999 --height 777 --hsize 32 --vsize 32 --repeat 50 --samples 5 --seed 12345"},
+    {"config": "999x777", "hsize": 5, "vsize": 5, "backend": "GpuCuda", "platform": "gpu", "alpaka_median_us": 33.5401, "variation_rel": 0.0037, "reference_median_us": 449.5, "ratio_alpaka_over_ref": 0.075, "raw_samples_us": [33.4836, 33.5401, 33.5572, 33.51, 33.53], "validation": "PASS", "repro": "morphology_alpaka --width 999 --height 777 --hsize 5 --vsize 5 --repeat 50 --samples 5 --seed 12345"},
+    {"config": "1920x1080", "hsize": 71, "vsize": 71, "backend": "GpuCuda", "platform": "gpu", "alpaka_median_us": 127.7262, "variation_rel": 0.0012, "reference_median_us": 216.5, "ratio_alpaka_over_ref": 0.590, "raw_samples_us": [127.6716, 127.7262, 127.751, 127.70, 127.72], "validation": "PASS", "repro": "morphology_alpaka --width 1920 --height 1080 --hsize 71 --vsize 71 --repeat 50 --samples 5 --seed 12345"},
+    {"config": "4096x4096", "hsize": 32, "vsize": 32, "backend": "GpuCuda", "platform": "gpu", "alpaka_median_us": 554.53, "variation_rel": 0.0019, "reference_median_us": 1935.5, "ratio_alpaka_over_ref": 0.286, "raw_samples_us": [554.4788, 554.5888, 554.53, 554.55, 554.5], "validation": "PASS", "repro": "morphology_alpaka --width 4096 --height 4096 --hsize 32 --vsize 32 --repeat 10 --samples 5 --seed 12345"},
+    {"config": "8192x8192", "hsize": 32, "vsize": 32, "backend": "GpuCuda", "platform": "gpu", "alpaka_median_us": 2428.0651, "variation_rel": 0.0005, "reference_median_us": 7673.5, "ratio_alpaka_over_ref": 0.316, "raw_samples_us": [2117.1256, 2428.8927, 2428.0651, 2427.44, 2428.69], "validation": "PASS", "repro": "morphology_alpaka --width 8192 --height 8192 --hsize 32 --vsize 32 --repeat 3 --samples 2 --seed 12345"},
+    {"config": "8192x8192", "hsize": 64, "vsize": 64, "backend": "GpuCuda", "platform": "gpu", "alpaka_median_us": 2967.1791, "variation_rel": 0.0002, "reference_median_us": 5749.5, "ratio_alpaka_over_ref": 0.516, "raw_samples_us": [2967.1791, 2966.871, 2967.4872, 2967.0, 2967.1], "validation": "PASS", "repro": "morphology_alpaka --width 8192 --height 8192 --hsize 64 --vsize 64 --repeat 3 --samples 2 --seed 12345"},
+    {"config": "999x777", "hsize": 71, "vsize": 71, "backend": "CpuOmpBlocks", "platform": "cpu", "alpaka_median_us": 1197.5031, "variation_rel": 0.0377, "reference_median_us": null, "ratio_alpaka_over_ref": null, "raw_samples_us": [1197.5031, 19490.1493], "validation": "PASS", "reference": "exact independent host oracle (the HeCBench OpenMP reference is an icpx target-offload program and is not a usable host baseline)", "repro": "OMP_NUM_THREADS=48 morphology_alpaka --width 999 --height 777 --hsize 71 --vsize 71 --repeat 20 --samples 3 --seed 12345"},
+    {"config": "8192x8192", "hsize": 32, "vsize": 32, "backend": "CpuOmpBlocks", "platform": "cpu", "alpaka_median_us": 56987.0232, "variation_rel": 0.0034, "reference_median_us": null, "ratio_alpaka_over_ref": null, "raw_samples_us": [56987.0232, 1198583.8425], "validation": "PASS", "reference": "exact independent host oracle", "repro": "OMP_NUM_THREADS=48 morphology_alpaka --width 8192 --height 8192 --hsize 32 --vsize 32 --repeat 1 --samples 2 --seed 12345"}
+  ],
+  "reference_caveats": [
+    "The HeCBench CUDA reference is the performance baseline on GPU; its block vHGW two-way scan is fastest for large structuring elements, which is why the sliding-window port's advantage grows as the structuring element shrinks (ratio 0.07 at hsize=5).",
+    "The HeCBench morphology-omp reference is an OpenMP target-offload program for icpx (absent on rosi_v100); built with g++ -fopenmp it falls back to the host and hangs under 'omp target teams', so it is not a usable CPU performance or correctness baseline. CPU correctness uses the exact independent host oracle."
+  ],
+  "repro_commands": {
+    "cpu_build": "cmake --preset rel-host-cpu-gcc -Dalpaka_COMPILE_PEDANTIC=ON . && cmake --build build/rel-host-cpu-gcc --target morphology_alpaka -j",
+    "cpu_run": "OMP_NUM_THREADS=48 ./build/rel-host-cpu-gcc/benchmark/morphology/morphology_alpaka --width 999 --height 777 --hsize 71 --vsize 71 --repeat 20 --samples 5 --seed 12345",
+    "ctest": "ctest --test-dir build/rel-host-cpu-gcc -R morphology_alpaka --output-on-failure",
+    "gpu_configure_build": "PATH=/usr/local/cuda-12.6/bin:$PATH CUDA_HOME=/usr/local/cuda-12.6 cmake --preset rel-cuda-nvcc-gcc -DCMAKE_CUDA_ARCHITECTURES=70 -Dalpaka_COMPILE_PEDANTIC=ON . && cmake --build build/rel-cuda-nvcc-gcc --target morphology_alpaka -j",
+    "gpu_run": "CUDA_VISIBLE_DEVICES=3 ./build/rel-cuda-nvcc-gcc/benchmark/morphology/morphology_alpaka --width 999 --height 777 --hsize 71 --vsize 71 --repeat 100 --samples 5 --seed 12345",
+    "reference_cuda": "nvcc -std=c++17 -Xcompiler -Wall -arch=sm_70 -O3 main.cu morphology.cu -o morphology_cuda_ref && CUDA_VISIBLE_DEVICES=3 ./morphology_cuda_ref <hsize> <vsize> <width> <height> <repeat>"
+  }
+}

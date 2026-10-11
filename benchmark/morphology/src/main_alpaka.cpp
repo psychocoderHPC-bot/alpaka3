@@ -6,9 +6,10 @@
  *
  * The pinned HeCBench reference (`src/morphology-cuda/main.cu` + `morphology.cu`, OpenMP twin
  * `src/morphology-omp/main.cpp` + `morphology.cpp`) applies a 2D separable morphological dilation
- * and erosion with a rectangular structuring element. The accelerator reference uses the van
- * Herk/Gil-Werman (vHGW) algorithm with a block-local two-way scan; it is O(1) per output element
- * and independent of the structuring-element size.
+ * and erosion with a rectangular structuring element. The HeCBench accelerator reference (its
+ * `.cu`/`.cpp` kernels, not this port) uses the van Herk/Gil-Werman (vHGW) algorithm with a
+ * block-local two-way scan; it is O(1) per output element and independent of the
+ * structuring-element size.
  *
  * This port keeps the reference pipeline exactly:
  *  - the same pass order: one horizontal pass then one vertical pass per operation,
@@ -46,10 +47,18 @@ namespace morphologyAlpaka
 
     namespace config
     {
-        //! Largest structuring-element size supported by the fixed-size per-thread deque.
+        //! Largest structuring-element size supported by the per-thread deque.
         constexpr int maxSel = 256;
         //! Output cells handled by one work item; controls the deque overlap and launch granularity.
         constexpr int segLen = 16;
+        //! Capacity of the linear (non-circular) per-thread deque.
+        //!
+        //! The deque holds the current window (<= maxSel entries) plus one slot for each push in
+        //! the segment; `tail` is an absolute index that only ever moves forward, so the array
+        //! must cover the initial window fill plus the segment's background pushes. Because the
+        //! values are 8-bit, a push cannot avoid a pop for more than 256 consecutive monotone
+        //! steps, so `maxSel + segLen` is a strict bound with margin for the general case.
+        constexpr int dequeCapacity = maxSel + segLen;
         //! Threads per block for a device launch.
         constexpr std::uint32_t threadsPerBlock = 128u;
     } // namespace config
@@ -94,7 +103,7 @@ namespace morphologyAlpaka
 
                 std::uint32_t const rowBase = static_cast<std::uint32_t>(row) * width;
 
-                int dq[config::maxSel];
+                int dq[config::dequeCapacity];
                 int head = 0;
                 int tail = 0;
                 auto valueAt = [&](int i) { return img[rowBase + static_cast<std::uint32_t>(i)]; };
@@ -183,7 +192,7 @@ namespace morphologyAlpaka
                 if(r0 >= rend)
                     continue;
 
-                int dq[config::maxSel];
+                int dq[config::dequeCapacity];
                 int head = 0;
                 int tail = 0;
                 auto valueAt = [&](int r)

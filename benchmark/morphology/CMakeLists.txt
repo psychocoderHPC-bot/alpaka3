@@ -25,3 +25,8 @@ target_link_libraries(morphology_alpaka PRIVATE Catch2::Catch2WithMain Catch2::C
 alpaka_finalize(morphology_alpaka)
 
 add_test(NAME morphology_alpaka COMMAND "morphology_alpaka" --width 129 --height 127 --hsize 5 --vsize 5 --repeat 2 --samples 2)
+# Boundary case for the maximum supported structuring element and the per-thread deque capacity.
+add_test(
+    NAME morphology_alpaka_hsize256
+    COMMAND "morphology_alpaka" --width 129 --height 127 --hsize 256 --vsize 256 --repeat 2 --samples 1 --seed 12345
+)

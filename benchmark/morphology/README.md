@@ -150,7 +150,7 @@ bugs, so this port keeps the comparison exact (tolerance 0). A nonzero exit code
 Validated on rosi_v100 (CPU `rel-host-cpu-gcc` and CUDA `rel-cuda-nvcc-gcc`, both with
 `alpaka_COMPILE_PEDANTIC=ON`):
 
-- odd, even, `1`, and large structuring elements (`1, 2, 3, 4, 5, 6, 7, 8, 33, 71, 255`),
+- odd, even, `1`, and large structuring elements (`1, 2, 3, 4, 5, 6, 7, 8, 33, 71, 240, 255, 256`),
 - image sizes `1, 2, 5, 16, 31, 33, 64, 99, 100, 127, 129, 255, 257, 511, 777, 999, 1023, 1025`
   in both dimensions, including 1-row/1-column and non-multiples of the segment length,
 - seeds `0` (reference image) and `12345`/`777` (random images),
@@ -201,7 +201,7 @@ it is not a usable CPU performance or correctness baseline. CPU correctness is v
 exact independent host reference.
 
 Raw per-run samples, exact commands, and CPU/GPU/compiler metadata are in
-`../results/morphology/morphology-gpu.csv`.
+[`results.json`](results.json) next to this README (machine-readable).
 
 ## Limitations and performance exception
 
