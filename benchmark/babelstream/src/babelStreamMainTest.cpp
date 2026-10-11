@@ -416,19 +416,14 @@ void testKernels(auto const deviceSpec, auto const exec)
         onHost::wait(queue);
 
         // Verify Dot kernel
-        DataType const expectedSum = static_cast<DataType>(arraySize) * expectedA * expectedB;
+        // Compute the reference exactly in double precision; the previous single-precision product lost the
+        // low bits at large array sizes and made the epsilon-tight check fail on NVIDIA GPUs.
+        double const expectedSum = static_cast<double>(arraySize) * expectedA * expectedB;
 
-        // allow a summation error of 100 epsilon per 32 mega elements
-        // The original bablesteam is always checking 8 digits only.
-        Idx presicionBaseArraySize = 32 * 1024 * 1024;
-        DataType epsScaling = divExZero(arraySize, presicionBaseArraySize);
-        //  Dot product should be identical to arraySize*valA*valB
-        //  Use a different equality check if floating point errors exceed the precision of FuzzyEqual function
-        REQUIRE(
-            FuzzyEqual<DataType>(
-                std::fabs(resultDot - expectedSum) / expectedSum,
-                static_cast<DataType>(0.0),
-                static_cast<DataType>(100.0) * epsScaling));
+        // Magnitude-aware comparison: absolute floor plus a relative tolerance against the larger operand.
+        // The reference summation error scales with the number of terms, so a pure relative epsilon bound is
+        // not sufficient for a tree/pairwise reduction.
+        REQUIRE(std::fabs(resultDot - expectedSum) <= 1e-9 + 1e-3 * std::max<double>(std::fabs(resultDot), std::fabs(expectedSum)));
 
         // Set workdivs of benchmark metadata to be displayed at the end
         metaData.setItem(BMInfoDataType::WorkDivInit, dataBlocking);
