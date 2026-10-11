@@ -1,0 +1,47 @@
+# dct8x8 reference provenance
+
+- HeCBench upstream: https://github.com/ORNL/HeCBench  SHA 0a17ee47ca6072192101036d4bf292e6612f22e6
+- Reference source READ from a fresh clone of the pinned SHA (sparse checkout of
+  `src/dct8x8-cuda src/dct8x8-omp`); blob SHAs at that commit:
+  - src/dct8x8-cuda/main.cu          f3686f55a784678c029399bb975ac16fe44c56c0
+  - src/dct8x8-cuda/kernels.cu       3b9607e718eb3a2faf682f59ad25d3b6ff47654a
+  - src/dct8x8-cuda/DCT8x8_gold.cu   5909bcd4eaae4063c77590fd63c6e3b15f496dcb
+  - src/dct8x8-cuda/DCT8x8.h         434d2862f5026a118684bdd22f24b80724d260d2
+  - src/dct8x8-omp/main.cpp          7b1035924130e78849882ba8caec546f7a7b95e6
+  - src/dct8x8-omp/kernels.cpp       6a2b95fa659303444ee098461819b12506a74a35
+  - src/dct8x8-omp/DCT8x8_gold.cpp   5909bcd4eaae4063c77590fd63c6e3b15f496dcb
+  - src/dct8x8-omp/DCT8x8.h          434d2862f5026a118684bdd22f24b80724d260d2
+- Original algorithm: NVIDIA CUDA SDK `dct8x8` sample (AAN 8-point fast DCT); the H.264-style
+  separable 8x8 transform. Reference sources kept OUTSIDE the repo at
+  /home/agent/dct8x8/dct8x8-ref-src/ (fwk394) and /tmp/dct8x8-ref-src/ (local).
+
+## Reference build
+
+CUDA reference (nvcc 12.5, sm_70):
+
+    export PATH=/usr/local/cuda/bin:$PATH
+    cd dct8x8-ref-src/dct8x8-cuda
+    nvcc -std=c++17 -Xcompiler -Wall -arch=sm_70 -O3 main.cu kernels.cu DCT8x8_gold.cu -o dct8x8_cuda_ref
+
+OpenMP reference (g++ 13.2; `omp target teams` offload pragmas are ignored by g++, so this runs the
+teams loop on the host — a functional check, not a tuned CPU baseline):
+
+    cd dct8x8-ref-src/dct8x8-omp
+    g++ -O2 -fopenmp -std=c++17 main.cpp kernels.cpp DCT8x8_gold.cpp -o dct8x8_omp_ref
+
+## Reference run
+
+    CUDA_VISIBLE_DEVICES=<idx> ./dct8x8_cuda_ref <width> <height> <repeat>
+
+The reference `Verify()` prints the relative L2 norm against `DCT8x8CPU` and PASS iff `< 1e-6`.
+Reference results (GV100, fwk394) at 8192x8192: forward 0.99 ms (rel L2 3.55e-08),
+inverse 0.99-1.09 ms (rel L2 8.44e-08); at 999x777: ~0.010-0.014 ms (rel L2 3.55e-08 / 8.45e-08).
+
+## Environment
+
+- GPU (primary): rosi_v100 4x Tesla V100-SXM2-32GB, CUDA 12.6, sm_70 — UNREACHABLE all session.
+- GPU (fallback used): fwk394 Quadro GV100 (Volta, sm_70, same architecture as V100),
+  CUDA 12.5, driver on host; GPU index 1 (`CUDA_VISIBLE_DEVICES=1`).
+- CPU: 28-thread host; g++ 13.2.0, cmake 3.28.3, ninja.
+- CUDA_VISIBLE_DEVICES=3 could not be used: rosi_v100 was unreachable for the entire task; the
+  fallback GV100 is the closest available sm_70 device.
