@@ -1,0 +1,31 @@
+gaussian benchmark provenance
+============================
+HeCBench reference: https://github.com/ORNL/HeCBench  SHA 0a17ee47ca6072192101036d4bf292e6612f22e6
+  CUDA:   src/gaussian-cuda/gaussianElim.cu  (blob 3c8d2554177d009808744f6f8aa79b64212c6dc5)
+  CUDA h: src/gaussian-cuda/gaussianElim.h   (blob 839c0e28c96d5389a94163d46df5aadc02f200bf)
+  OMP:    src/gaussian-omp/gaussianElim.cpp    (blob 268d920bc1eeb110b758a2faab347faf9cb57269)
+  shared: src/gaussian-cuda/utils.h            (blob 1e901cedc9a90759699bcefc472ac70970e70a34)
+Upstream license: BSD-3-Clause (Argonne National Laboratory, ORNL; utils.h also AMD 2011).
+
+alpaka3 fork: psychocoderHPC-bot/alpaka3  base dev 6f13700c390a09df818a255d53e730f1f9d69456
+task branch: benchmark/gaussian
+local commit: 49042c8552c5c70dec9503284c589b8d2f1f76be (no push)
+
+Reference builds (outside the repo):
+  nvcc -std=c++17 -Xcompiler -Wall -arch=sm_70 -O3 gaussianElim.cu -o gaussian_cuda_ref
+  g++  -O2 -fopenmp -std=c++17 gaussianElim.cpp utils.cpp -o gaussian_omp_ref
+
+Reference measurement commands:
+  CUDA: ./gaussian_cuda_ref -q -t -s N    (metric: "Total kernel execution time", fan1/fan2 loop only)
+  OMP : OMP_NUM_THREADS=28 ./gaussian_omp_ref -q -t -s N
+
+Implementation measurement command:
+  gaussian_alpaka --size N --samples 5 --repeat 1
+  metric: forward-elimination seconds between host synchronisations, median of 5 samples.
+
+Sizes validated (--verify-only, both backends PASS):
+  1,2,3,4,7,8,15,16,31,32,63,64,65,100,127,128,129,255,256,257,511,512,513,1000,1024,1025
+Independent oracle: double-precision partial-pivot LU (helper.hpp).
+Tolerance atol=rtol=1e-3, max rel residual 1e-3; observed worst |x-gold|<=1.8e-5, rel residual<=2.6e-6.
+
+Raw samples: results/gaussian/gaussian-perf.csv and evidence/gaussian/*.txt

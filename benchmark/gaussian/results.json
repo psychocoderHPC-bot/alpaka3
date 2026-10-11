@@ -1,0 +1,173 @@
+{
+  "benchmark": "gaussian",
+  "workload_sha": "0a17ee47ca6072192101036d4bf292e6612f22e6",
+  "alpaka_commit": "4b16cccbcd46158f686516770507fb5acfa79839",
+  "base": "6f13700c390a09df818a255d53e730f1f9d69456",
+  "impl": "benchmark/gaussian (portable alpaka; Gaussian elimination without pivoting on a generated Toeplitz matrix)",
+  "cpu_model": "Intel Xeon W-2175 @ 2.50GHz (fwk394, 28 threads)",
+  "gpu_model": "Quadro GV100 32GB (fwk394, CUDA_VISIBLE_DEVICES=1); sm_70",
+  "note_gpu_assignment": "protocol requested rosi_v100 (Tesla V100); rosi_v100 was unreachable via compute MCP for the whole run (every exec/session/file call failed while other connected targets worked). Used connected fwk394 (Quadro GV100, sm_70, CUDA 12.5).",
+  "compilers": {
+    "cpu": "g++ 13.2.0, rel-host-cpu-gcc, -Dalpaka_COMPILE_PEDANTIC=ON, OMP_NUM_THREADS=28",
+    "cuda": "nvcc 12.5 sm_70, rel-cuda-nvcc-gcc, -DCMAKE_CUDA_ARCHITECTURES=70 -Dalpaka_COMPILE_PEDANTIC=ON",
+    "ref_cuda": "nvcc -std=c++17 -Xcompiler -Wall -arch=sm_70 -O3 gaussianElim.cu",
+    "ref_cpu": "g++ -O2 -fopenmp -std=c++17 gaussianElim.cpp utils.cpp"
+  },
+  "reference": {
+    "repo": "https://github.com/ORNL/HeCBench",
+    "sha": "0a17ee47ca6072192101036d4bf292e6612f22e6",
+    "cuda_source": "src/gaussian-cuda/gaussianElim.cu",
+    "cuda_source_blob": "3c8d2554177d009808744f6f8aa79b64212c6dc5",
+    "cuda_header": "src/gaussian-cuda/gaussianElim.h",
+    "cuda_header_blob": "839c0e28c96d5389a94163d46df5aadc02f200bf",
+    "omp_source": "src/gaussian-omp/gaussianElim.cpp",
+    "omp_source_blob": "268d920bc1eeb110b758a2faab347faf9cb57269",
+    "shared_header": "src/gaussian-cuda/utils.h",
+    "shared_header_blob": "1e901cedc9a90759699bcefc472ac70970e70a34",
+    "readme_entry": "line 791, gaussian (opencl): Gaussian elimination in the Rodinia benchmark suite",
+    "license": "BSD-3-Clause (Argonne National Laboratory, ORNL; utils.h also AMD 2011). Reference not vendored.",
+    "omp_usable_as_baseline": false,
+    "omp_note": "OpenMP target-offload program for icpx, absent on the remote host; g++ -fopenmp host fallback only parallelises the innermost loop, so it is not a like-for-like CPU baseline"
+  },
+  "timing_scope": "forward-elimination time only: one size-1 step elimination per sample, timed between two host synchronisations; matches the reference '-t' scope (fan1/fan2 loop). One warm-up elimination precedes the measured samples; median of 5 samples.",
+  "warmup": 1,
+  "reps": 5,
+  "acceptance_metric": "GPU (CUDA) runtime ratio, median alpaka / median reference",
+  "metrics": [
+    {
+      "mode": "gpu",
+      "size": 1024,
+      "backend": "cuda",
+      "validation": "PASS",
+      "alpaka_median_ms": 8.91082,
+      "ref_median_ms": 7.809,
+      "ratio": 1.141,
+      "variation": 0.0012,
+      "raw_samples_ms": [
+        8.915995,
+        8.912822,
+        8.905462,
+        8.909716,
+        8.91082
+      ]
+    },
+    {
+      "mode": "gpu",
+      "size": 2048,
+      "backend": "cuda",
+      "validation": "PASS",
+      "alpaka_median_ms": 55.213448,
+      "ref_median_ms": 134.625,
+      "ratio": 0.41,
+      "variation": 0.1488,
+      "raw_samples_ms": [
+        55.234046,
+        55.23607,
+        55.213448,
+        52.902524,
+        47.020314
+      ],
+      "note": "reference median is noisy on the shared fallback GPU: the reference's own five samples spanned 60.3-134.9 ms"
+    },
+    {
+      "mode": "gpu",
+      "size": 4096,
+      "backend": "cuda",
+      "validation": "PASS",
+      "alpaka_median_ms": 353.261347,
+      "ref_median_ms": 483.876,
+      "ratio": 0.73,
+      "variation": 0.0003,
+      "raw_samples_ms": [
+        353.242611,
+        353.185083,
+        353.29208,
+        353.280403,
+        353.261347
+      ]
+    },
+    {
+      "mode": "cpu",
+      "size": 1024,
+      "backend": "host-ompblocks",
+      "threads": 28,
+      "validation": "PASS",
+      "alpaka_median_ms": 115.098504,
+      "ref_median_ms": 5460.161,
+      "ratio": 0.021,
+      "variation": 0.0568,
+      "note": "reference has no device offload under g++, not a like-for-like baseline; indicative only"
+    },
+    {
+      "mode": "cpu",
+      "size": 2048,
+      "backend": "host-ompblocks",
+      "threads": 28,
+      "validation": "PASS",
+      "alpaka_median_ms": 754.208499,
+      "ref_median_ms": 9757.401,
+      "ratio": 0.077,
+      "variation": 0.0566,
+      "note": "reference has no device offload under g++, not a like-for-like baseline; indicative only"
+    }
+  ],
+  "performance_exceptions": [
+    {
+      "config": "N=1024 CUDA",
+      "ratio": 1.141,
+      "summary": "Small-N launch-overhead exception above the 1.10 acceptance bound. At N=1024 the reference launches 2*(N-1)=2046 kernels, as does this port, but each kernel is tiny (<2M element updates total) so the measured interval is dominated by per-launch overhead; the CUDA runtime launch path is cheaper than alpaka's Queue::enqueue path for this short-kernel regime. The gap closes as work per kernel grows: N=2048 and N=4096 are 1.4-2.4x faster than the reference, so the port is not slower in the compute-bound regime."
+    },
+    {
+      "config": "N=2048 CUDA reference median",
+      "summary": "The N=2048 reference median is noisy because the Quadro GV100 is a shared, non-exclusive machine: the reference's own five samples spanned 60.3-134.9 ms (median 134.6) while this port's spanned 47.0-55.2 ms (median 55.2). Treat the 0.410 ratio as indicative."
+    }
+  ],
+  "validation": {
+    "kind": "double-precision partial-pivot LU oracle (gaussianGoldDouble) plus a relative-residual check",
+    "rationale": "the reference itself accepts atol 1e-3 between its single-precision device run and its single-precision host reference. Our oracle is double precision with partial pivoting, so the difference is dominated by the benchmark's own rounding. Measured worst-case absolute differences stay below 1.8e-5, so atol=rtol=1e-3 leaves more than a 50x margin. The residual check is the stronger gate: for a correct solution it stays below 3e-6 at N=4096, while a wrong elimination pushes it toward O(1).",
+    "sizes": [
+      1,
+      2,
+      3,
+      4,
+      7,
+      8,
+      15,
+      16,
+      31,
+      32,
+      63,
+      64,
+      65,
+      100,
+      127,
+      128,
+      129,
+      255,
+      256,
+      257,
+      511,
+      512,
+      513,
+      1000,
+      1024,
+      1025
+    ],
+    "result": "PASS on host CPU and CUDA backends",
+    "nan_inf_checked": true,
+    "nonzero_exit_on_failure": true
+  },
+  "repro": {
+    "cpu_build": "cmake --preset rel-host-cpu-gcc -Dalpaka_COMPILE_PEDANTIC=ON . && cmake --build build/rel-host-cpu-gcc --target gaussian_alpaka -j",
+    "cuda_build": "PATH=/usr/local/cuda/bin:$PATH CUDA_HOME=/usr/local/cuda cmake --preset rel-cuda-nvcc-gcc -DCMAKE_CUDA_ARCHITECTURES=70 -Dalpaka_COMPILE_PEDANTIC=ON . && cmake --build build/rel-cuda-nvcc-gcc --target gaussian_alpaka -j",
+    "cpu_run": "OMP_NUM_THREADS=28 ./build/rel-host-cpu-gcc/benchmark/gaussian/gaussian_alpaka --size 1024 --samples 5",
+    "cuda_run": "CUDA_VISIBLE_DEVICES=1 ./build/rel-cuda-nvcc-gcc/benchmark/gaussian/gaussian_alpaka --size 4096 --samples 5",
+    "ref_cuda": "nvcc -std=c++17 -Xcompiler -Wall -arch=sm_70 -O3 gaussianElim.cu -o gaussian_cuda_ref && CUDA_VISIBLE_DEVICES=1 ./gaussian_cuda_ref -q -t -s 1024",
+    "ref_cpu": "g++ -O2 -fopenmp -std=c++17 gaussianElim.cpp utils.cpp -o gaussian_omp_ref && OMP_NUM_THREADS=28 ./gaussian_omp_ref -q -t -s 1024"
+  },
+  "raw_data": {
+    "perf_csv": "benchmark/gaussian/gaussian-perf.csv",
+    "provenance": "benchmark/gaussian/provenance.txt",
+    "summary": "benchmark/gaussian/summary.md"
+  }
+}
