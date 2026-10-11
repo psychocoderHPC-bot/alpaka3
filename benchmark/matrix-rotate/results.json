@@ -1,0 +1,121 @@
+{
+  "benchmark": "matrix-rotate",
+  "protocol_run": "hecbench-alpaka3-2026-10-10",
+  "hecbench": {
+    "repo": "https://github.com/ORNL/HeCBench",
+    "sha": "0a17ee47ca6072192101036d4bf292e6612f22e6",
+    "cuda_source": "src/matrix-rotate-cuda/main.cu",
+    "omp_source": "src/matrix-rotate-omp/main.cpp"
+  },
+  "reference_build": {
+    "cpu": "g++ -O2 -fopenmp -std=c++17 main.cpp -o matrix-rotate-omp-ref",
+    "cuda": "nvcc -std=c++17 -arch=sm_70 -O3 main.cu -o matrix-rotate-cuda-ref"
+  },
+  "machine": {
+    "cpu": "Intel(R) Xeon(R) Gold 6136 CPU @ 3.00GHz (2 sockets x 12 cores, NUMA; 48 HT)",
+    "gpu": "Tesla V100-SXM2-32GB (CUDA_VISIBLE_DEVICES=3)",
+    "cuda": "12.6",
+    "gcc": "13.2.0",
+    "cmake": "3.28.3"
+  },
+  "build": {
+    "cpu": "cmake --preset rel-host-cpu-gcc -Dalpaka_COMPILE_PEDANTIC=ON",
+    "gpu": "cmake --preset rel-cuda-nvcc-gcc -DCMAKE_CUDA_ARCHITECTURES=70 -Dalpaka_COMPILE_PEDANTIC=ON"
+  },
+  "validation": {
+    "tolerance": "exact (bit-exact)",
+    "rationale": "rotation permutes non-negative integers exactly representable in float; no rounding",
+    "nonzero_exit_on_failure": true,
+    "nonfinite_checks": true,
+    "cases": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      7,
+      8,
+      9,
+      15,
+      16,
+      17,
+      101,
+      4095,
+      2000,
+      5000,
+      10000
+    ]
+  },
+  "results": [
+    {
+      "backend": "GpuCuda",
+      "size": 2000,
+      "alpaka_median_us": 3479.776,
+      "ref_median_us": 3865,
+      "ratio": 0.9,
+      "variation_pct": 0.06,
+      "reps": 7,
+      "validation": "PASSED"
+    },
+    {
+      "backend": "GpuCuda",
+      "size": 5000,
+      "alpaka_median_us": 9145.607,
+      "ref_median_us": 9189,
+      "ratio": 0.995,
+      "variation_pct": 0.36,
+      "reps": 7,
+      "validation": "PASSED"
+    },
+    {
+      "backend": "GpuCuda",
+      "size": 10000,
+      "alpaka_median_us": 19842.091,
+      "ref_median_us": 19690,
+      "ratio": 1.008,
+      "variation_pct": 0.04,
+      "reps": 7,
+      "validation": "PASSED"
+    },
+    {
+      "backend": "CpuOmpBlocks",
+      "size": 2000,
+      "alpaka_median_us": 624.858,
+      "ref_median_us": 1769,
+      "ratio": 0.353,
+      "variation_pct": 8.9,
+      "reps": 7,
+      "validation": "PASSED"
+    },
+    {
+      "backend": "CpuOmpBlocks",
+      "size": 5000,
+      "alpaka_median_us": 4064.988,
+      "ref_median_us": 5905,
+      "ratio": 0.688,
+      "variation_pct": 11.3,
+      "reps": 7,
+      "validation": "PASSED"
+    },
+    {
+      "backend": "CpuOmpBlocks",
+      "size": 10000,
+      "alpaka_median_us": 36986.897,
+      "ref_median_us": 33000,
+      "ratio": 1.121,
+      "variation_pct": 22.2,
+      "reps": 7,
+      "validation": "PASSED",
+      "exception": true
+    }
+  ],
+  "ctest": {
+    "cpu": "PASSED (matrix-rotate_alpaka --size 17 --repeat 3)",
+    "gpu": "PASSED (matrix-rotate_alpaka --size 17 --repeat 3)"
+  },
+  "notes": [
+    "timing scope: repeat kernel launches bracketed by one device synchronization; warmup 1 batch; median of 7",
+    "host CPU ratio at n=10000 is a documented NUMA/threading exception; ref OpenMP timing varies >2x between 24 and 48 threads on the 2-socket box",
+    "raw logs on rosi_v100: /root/matrix-rotate-results/"
+  ]
+}
