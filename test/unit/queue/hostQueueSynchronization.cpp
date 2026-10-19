@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <future>
 #include <memory>
+#include <stdexcept>
 #include <thread>
 #include <utility>
 
@@ -261,31 +262,26 @@ TEST_CASE("host blocking event wait lets the event producer enter the queue", "[
     }
 }
 
-// The following cases document accepted limitations and are intentionally disabled.
-// TEST_CASE("host nonblocking queue wait does not propagate callback failures", "[queue]")
-// {
-//     auto device = onHost::makeHostDevice();
-//     auto queue = device.makeQueue(queueKind::nonBlocking);
-//     queue.enqueueHostFn([] { throw std::runtime_error{"host task failure"}; });
-//
-//     // Documented contract: queue synchronization does not propagate callback failures.
-//     // The original error-propagation expectation is disabled; validate synchronization only.
-//     // CHECK_THROWS_AS(onHost::wait(queue), std::runtime_error);
-//     CHECK_NOTHROW(onHost::wait(queue));
-// }
-//
-// TEST_CASE("host event wait does not propagate preceding callback failures", "[queue]")
-// {
-//     // Queue: throwing callback -> event. The event only reports its own completion.
-//     auto device = onHost::makeHostDevice();
-//     auto queue = device.makeQueue(queueKind::nonBlocking);
-//     auto event = queue.makeEvent();
-//     queue.enqueueHostFn([] { throw std::runtime_error{"host task failure"}; });
-//     queue.enqueue(event);
-//
-//     // Documented limitation: event synchronization does not propagate earlier callback failures.
-//     // The original error-propagation expectation is disabled for this implementation contract.
-//     // CHECK_THROWS_AS(onHost::wait(event), std::runtime_error);
-//     CHECK_NOTHROW(onHost::wait(event));
-//     CHECK(event.isComplete());
-// }
+TEST_CASE("host nonblocking queue wait propagates callback failures", "[queue]")
+{
+    auto device = onHost::makeHostDevice();
+    auto queue = device.makeQueue(queueKind::nonBlocking);
+    queue.enqueueHostFn([] { throw std::runtime_error{"host task failure"}; });
+
+    // The first callback failure is reported once; a repeated wait observes a clean queue.
+    CHECK_THROWS_AS(onHost::wait(queue), std::runtime_error);
+    CHECK_NOTHROW(onHost::wait(queue));
+}
+
+TEST_CASE("host event wait propagates preceding callback failures", "[queue]")
+{
+    // Queue: throwing callback -> event. The event must carry the failure that precedes it.
+    auto device = onHost::makeHostDevice();
+    auto queue = device.makeQueue(queueKind::nonBlocking);
+    auto event = queue.makeEvent();
+    queue.enqueueHostFn([] { throw std::runtime_error{"host task failure"}; });
+    queue.enqueue(event);
+
+    CHECK_THROWS_AS(onHost::wait(event), std::runtime_error);
+    CHECK(event.isComplete());
+}

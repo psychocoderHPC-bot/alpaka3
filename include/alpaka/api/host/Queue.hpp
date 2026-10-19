@@ -27,9 +27,11 @@
 #include <condition_variable>
 #include <cstdint>
 #include <cstring>
+#include <exception>
 #include <future>
 #include <mutex>
 #include <thread>
+#include <utility>
 
 namespace alpaka::onHost
 {
@@ -81,6 +83,25 @@ namespace alpaka::onHost
             }
 
             Handle<T_Device> m_device;
+
+            /** Mutex to ensure sequential execution of tasks and operation if the queue is blocking.
+             *
+             * For non-blocking queue @c m_sharedCallbackThread is taking care of the execution order.
+             * The mutex is recursive because a task may release resources owned by the queue,
+             * e.g. a deferred SharedBuffer deleter submits the free into this queue from within a
+             * task which already holds the lock.
+             *
+             * It is declared before @c m_sharedCallbackThread so that it stays alive while the callback
+             * thread drains pending tasks during destruction.
+             */
+            std::recursive_mutex m_mutex;
+
+            /** First exception thrown by a callback of a non-blocking queue.
+             *
+             * It is consumed by the next queue synchronization. The slot is guarded by @c m_mutex.
+             */
+            std::exception_ptr m_callbackException;
+
             std::shared_ptr<core::CallbackThread> m_sharedCallbackThread;
             uint32_t m_idx = 0u;
             uint32_t m_numaIdx = 0u;
@@ -108,15 +129,6 @@ namespace alpaka::onHost
 
             /** Signals that a pending blocking dependency wait has finished. */
             std::condition_variable_any m_blockingTaskCondition;
-
-            /** Mutex to ensure sequential execution of tasks and operation if the queue is blocking.
-             *
-             * For non-blocking queue @c m_workerThread is taking care of the execution order.
-             * The mutex is recursive because a task may release resources owned by the queue,
-             * e.g. a deferred SharedBuffer deleter submits the free into this queue from within a
-             * task which already holds the lock.
-             */
-            std::recursive_mutex m_mutex;
 
             /** Keep the blocking-task bookkeeping consistent on every exit path.
              *
@@ -185,7 +197,22 @@ namespace alpaka::onHost
                     return f;
                 }
                 // enqueue the task into the worker thread, callers can wait/chain later.
-                return m_sharedCallbackThread->submit(std::forward<T_Fn>(fn));
+                return m_sharedCallbackThread->submit(
+                    [this, fn = std::forward<T_Fn>(fn)]() mutable
+                    {
+                        try
+                        {
+                            fn();
+                        }
+                        catch(...)
+                        {
+                            // Store only the first failure; later callbacks still run.
+                            std::lock_guard<std::recursive_mutex> lock{m_mutex};
+                            if(!m_callbackException)
+                                m_callbackException = std::current_exception();
+                            throw;
+                        }
+                    });
             }
 
             friend struct alpaka::internal::GetName;
@@ -279,7 +306,7 @@ namespace alpaka::onHost
                 }
                 else
                 {
-                    m_sharedCallbackThread->submit(task);
+                    submit(task);
                 }
             }
 
@@ -366,10 +393,19 @@ namespace alpaka::onHost
                             [&queue] { return queue.m_blockingTaskExecutionDepth.load() == 0u; });
                     }
                 }
-                else if(queue.isQueueEmpty() == false)
+                else
                 {
-                    // Queue synchronization does not propagate preceding callback failures.
-                    queue.submit([]() {}).wait();
+                    if(queue.isQueueEmpty() == false)
+                        queue.submit([]() {}).wait();
+
+                    // Report the first recorded callback failure once.
+                    std::exception_ptr callbackException;
+                    {
+                        std::lock_guard<std::recursive_mutex> lock{queue.m_mutex};
+                        callbackException = std::exchange(queue.m_callbackException, nullptr);
+                    }
+                    if(callbackException)
+                        std::rethrow_exception(callbackException);
                 }
             }
         };
@@ -380,15 +416,15 @@ namespace alpaka::onHost
             void operator()(cpu::Queue<T_Device>& queue, T_Event& event) const
             {
                 ALPAKA_LOG_FUNCTION(onHost::logger::event + onHost::logger::queue);
-                /* a blocking queue must acquire this lock to ensure that all pending host tasks
-                 * have finished
+                /* A blocking queue must acquire this lock to ensure that all pending host tasks have finished.
+                 * A non-blocking queue takes it to read the recorded callback failure without racing a callback.
                  *
                  * Acquire the queue lock before the event lock. A pending queue dependency may need the event
                  * lock to complete, so holding it while waiting for the queue lock would create a deadlock.
                  */
-                std::unique_lock<std::recursive_mutex> queueLock(queue.m_mutex, std::defer_lock);
-                if(queue.m_isBlocking)
-                    queueLock.lock();
+                std::lock_guard<std::recursive_mutex> queueLock(queue.m_mutex);
+                // Failure that was already recorded when the event is recorded.
+                auto const recordedException = queue.m_callbackException;
                 // open a scope to avoid logging during we hold the lock for this class
                 {
                     // Setting the event state (e.g. the future) and enqueuing it has to be atomic.
@@ -411,29 +447,45 @@ namespace alpaka::onHost
                                 event.m_timestamp = std::chrono::steady_clock::now();
                             event.m_lastReadyEnqueueCount = std::max(enqueueCount, event.m_lastReadyEnqueueCount);
                         }
-                        // apply a fulfilled future
+                        // apply a fulfilled future, carrying a preceding callback failure if present
                         std::promise<void> p;
-                        p.set_value();
+                        if(recordedException)
+                            p.set_exception(recordedException);
+                        else
+                            p.set_value();
                         event.m_future = p.get_future();
                     }
                     else
                     {
                         auto sharedEvent = event.getSharedPtr();
-                        // Enqueue a task that only resets the events flag if it is completed.
-                        event.m_future = queue.submit(
-                            [sharedEvent, enqueueCount]() mutable
+                        /* Enqueue a task that only resets the events flag if it is completed. It runs after all
+                         * previously enqueued callbacks, so a recorded failure belongs to a callback that precedes
+                         * the event. Later callbacks can not have failed yet.
+                         */
+                        event.m_future = queue.m_sharedCallbackThread->submit(
+                            [&queue, sharedEvent, enqueueCount, recordedException]() mutable
                             {
                                 auto const timestamp = std::chrono::steady_clock::now();
-                                std::unique_lock<std::mutex> lk2(sharedEvent->m_mutex);
-
-                                // Nothing to do if it has been re-enqueued to a later position in the queue.
-                                if(enqueueCount == sharedEvent->m_enqueueCount)
+                                std::exception_ptr callbackException = recordedException;
                                 {
-                                    if(sharedEvent->m_timingEnabled)
-                                        sharedEvent->m_timestamp = timestamp;
-                                    sharedEvent->m_lastReadyEnqueueCount
-                                        = std::max(enqueueCount, sharedEvent->m_lastReadyEnqueueCount);
+                                    // Keep the queue-before-event lock order of the recording path.
+                                    std::lock_guard<std::recursive_mutex> queueGuard(queue.m_mutex);
+                                    // Catch a failure whose callback only completed after the event was enqueued.
+                                    if(!callbackException)
+                                        callbackException = queue.m_callbackException;
+                                    std::unique_lock<std::mutex> lk2(sharedEvent->m_mutex);
+
+                                    // Nothing to do if it has been re-enqueued to a later position in the queue.
+                                    if(enqueueCount == sharedEvent->m_enqueueCount)
+                                    {
+                                        if(sharedEvent->m_timingEnabled)
+                                            sharedEvent->m_timestamp = timestamp;
+                                        sharedEvent->m_lastReadyEnqueueCount
+                                            = std::max(enqueueCount, sharedEvent->m_lastReadyEnqueueCount);
+                                    }
                                 }
+                                if(callbackException)
+                                    std::rethrow_exception(callbackException);
                             });
                     }
                 }
