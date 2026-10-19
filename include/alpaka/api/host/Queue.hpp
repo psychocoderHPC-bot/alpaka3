@@ -498,8 +498,6 @@ namespace alpaka::onHost
             void operator()(cpu::Queue<T_Device>& queue, cpu::Event<T_Device>& event) const
             {
                 ALPAKA_LOG_FUNCTION(onHost::logger::event + onHost::logger::queue);
-                // Keep the event alive until the dependency wait has finished.
-                auto sharedEvent = event.getSharedPtr();
                 std::shared_future<void> oldFuture;
                 // open a scope to avoid logging during we hold the lock for this class
                 {
@@ -528,8 +526,12 @@ namespace alpaka::onHost
                         oldFuture.get();
                     }
                     else
+                    {
+                        // Keep the event alive until the deferred dependency wait has finished.
+                        auto sharedEvent = event.getSharedPtr();
                         // Enqueue a task that waits for the given future of the event.
                         queue.submit([sharedEvent, oldFuture]() { oldFuture.get(); });
+                    }
                 }
             }
         };
