@@ -364,3 +364,35 @@ TEST_CASE("host event wait propagates preceding callback failures", "[queue]")
     CHECK_THROWS_AS(onHost::wait(event), std::runtime_error);
     CHECK(event.isComplete());
 }
+
+TEST_CASE("host nonblocking queue state outlives a deferred finalize", "[queue]")
+{
+    auto platform = onHost::internal::makePlatform(api::Host{}, deviceKind::Cpu{});
+    auto device = onHost::internal::MakeDevice::Op<ALPAKA_TYPEOF(*platform)>{}(*platform, 0u);
+    using DeviceType = ALPAKA_TYPEOF(*device);
+    auto const policies = onHost::QueuePolicyList{queueKind::nonBlocking};
+    using QueueWrapper = onHost::Queue<onHost::Device<api::Host, deviceKind::Cpu>, ALPAKA_TYPEOF(policies)>;
+
+    /* Construct the internal queue directly so no device-side weak_ptr keeps the shared control block
+     * allocated after the queue object is destroyed; that makes the use-after-free visible to ASan. */
+    auto queue = std::make_unique<QueueWrapper>(
+        std::make_shared<onHost::cpu::Queue<DeviceType>>(device, 0u, onHost::internal::hwloc::allDomains, policies),
+        policies);
+    auto event = queue->makeEvent();
+    auto taskStarted = std::make_shared<std::promise<void>>();
+    auto started = taskStarted->get_future();
+
+    queue->enqueueHostFn(
+        [queueCopy = *queue, event, taskStarted = std::move(taskStarted), &queue]()
+        {
+            /* Queue an event finalize which runs after this callback has released the last queue handle.
+             * The callback thread then destroys the queue itself (self-join path in CallbackThread). */
+            queueCopy.enqueue(event);
+            taskStarted->set_value();
+            queue.reset();
+        });
+
+    REQUIRE(started.wait_for(startupTimeout) == std::future_status::ready);
+    // Draining the finalize task must not touch a destroyed queue mutex or exception slot.
+    CHECK_NOTHROW(onHost::wait(event));
+}

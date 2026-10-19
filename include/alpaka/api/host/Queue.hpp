@@ -197,8 +197,12 @@ namespace alpaka::onHost
                     return f;
                 }
                 // enqueue the task into the worker thread, callers can wait/chain later.
+                /* Keep the queue alive for the wrapper and its bookkeeping. A task may release the last queue
+                 * handle from within the callback thread, so a raw `this` capture could dangle by the time the
+                 * wrapper touches the mutex or the exception slot. */
+                auto self = this->getSharedPtr();
                 return m_sharedCallbackThread->submit(
-                    [this, fn = std::forward<T_Fn>(fn)]() mutable
+                    [self = std::move(self), fn = std::forward<T_Fn>(fn)]() mutable
                     {
                         try
                         {
@@ -207,9 +211,9 @@ namespace alpaka::onHost
                         catch(...)
                         {
                             // Store only the first failure; later callbacks still run.
-                            std::lock_guard<std::recursive_mutex> lock{m_mutex};
-                            if(!m_callbackException)
-                                m_callbackException = std::current_exception();
+                            std::lock_guard<std::recursive_mutex> lock{self->m_mutex};
+                            if(!self->m_callbackException)
+                                self->m_callbackException = std::current_exception();
                             throw;
                         }
                     });
@@ -461,21 +465,29 @@ namespace alpaka::onHost
                     else
                     {
                         auto sharedEvent = event.getSharedPtr();
+                        /* The finalize task runs after this recording returns and may be the last owner of the
+                         * queue, e.g. when a preceding callback released the last queue handle. Capture a shared
+                         * handle instead of a reference so its bookkeeping never touches a destroyed queue.
+                         */
+                        auto sharedQueue = queue.getSharedPtr();
                         /* Enqueue a task that only resets the events flag if it is completed. It runs after all
                          * previously enqueued callbacks, so a recorded failure belongs to a callback that precedes
                          * the event. Later callbacks can not have failed yet.
                          */
                         event.m_future = queue.m_sharedCallbackThread->submit(
-                            [&queue, sharedEvent, enqueueCount, recordedException]() mutable
+                            [sharedQueue = std::move(sharedQueue),
+                             sharedEvent,
+                             enqueueCount,
+                             recordedException]() mutable
                             {
                                 auto const timestamp = std::chrono::steady_clock::now();
                                 std::exception_ptr callbackException = recordedException;
                                 {
                                     // Keep the queue-before-event lock order of the recording path.
-                                    std::lock_guard<std::recursive_mutex> queueGuard(queue.m_mutex);
+                                    std::lock_guard<std::recursive_mutex> queueGuard(sharedQueue->m_mutex);
                                     // Catch a failure whose callback only completed after the event was enqueued.
                                     if(!callbackException)
-                                        callbackException = queue.m_callbackException;
+                                        callbackException = sharedQueue->m_callbackException;
                                     std::unique_lock<std::mutex> lk2(sharedEvent->m_mutex);
 
                                     // Nothing to do if it has been re-enqueued to a later position in the queue.
