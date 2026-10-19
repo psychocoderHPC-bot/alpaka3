@@ -79,9 +79,10 @@ function(alpaka_add_test_target target_prefix folder)
                     if(_test_target_name STREQUAL "unit_test_queue_hostQueueSynchronization")
                         # The host synchronization tests gate worker threads and wait with bounded
                         # watchdogs (up to 5 s per stage), so allow them to report a failed assertion
-                        # before CTest kills the process. The OpenMP queue tests request three
-                        # threads explicitly via num_threads(3).
+                        # before CTest kills the process.
                         set(_test_properties PROPERTIES TIMEOUT 30)
+                    elseif(_test_target_name STREQUAL "unit_test_queue_ompCollectiveQueue")
+                        # This target requests three threads explicitly via num_threads(3).
                     endif()
                     catch_discover_tests(${_test_target_name} EXTRA_ARGS "-w" "NoAssertions" ${_test_properties})
                 endif()
