@@ -108,49 +108,47 @@ TEST_CASE("host blocking event wait keeps the queue nonempty", "[queue]")
     CHECK(queueWaitStatus == std::future_status::timeout);
 }
 
+TEST_CASE("host queue wait includes callback destruction", "[queue]")
+{
+    // Queue completion must not be published before the callback captures are destroyed.
+    // Hold the destructor open after the callback body has already returned.
+    auto device = onHost::makeHostDevice();
+    auto queue = device.makeQueue(queueKind::nonBlocking);
+
+    struct Cleanup
+    {
+        std::promise<void>& started;
+        std::shared_future<void> release;
+
+        ~Cleanup()
+        {
+            started.set_value();
+            release.wait();
+        }
+    };
+
+    std::promise<void> cleanupStarted;
+    std::promise<void> releaseCleanup;
+    std::promise<void> releaseTask;
+    auto cleanup = std::shared_ptr<Cleanup>(new Cleanup{cleanupStarted, releaseCleanup.get_future().share()});
+    auto taskGate = releaseTask.get_future().share();
+    queue.enqueueHostFn([cleanup, taskGate] { taskGate.wait(); });
+    // Leave the queued callback as the last owner before allowing its body to return.
+    cleanup.reset();
+    releaseTask.set_value();
+    cleanupStarted.get_future().wait();
+
+    // The queue entry stays until the task and its captures are destroyed, so wait(queue)
+    // must not become ready while the destructor is held open.
+    auto waiter = std::async(std::launch::async, [&] { onHost::wait(queue); });
+    auto const waitStatus = waiter.wait_for(blockingInterval);
+    releaseCleanup.set_value();
+    waiter.get();
+
+    CHECK(waitStatus == std::future_status::timeout);
+}
+
 // The following cases document accepted limitations and are intentionally disabled.
-// TEST_CASE("host queue wait excludes callback destruction", "[queue]")
-// {
-//     // Documented contract: queue completion excludes destruction of callback captures.
-//     // Hold the destructor open after the callback body has already returned.
-//     auto device = onHost::makeHostDevice();
-//     auto queue = device.makeQueue(queueKind::nonBlocking);
-//
-//     struct Cleanup
-//     {
-//         std::promise<void>& started;
-//         std::shared_future<void> release;
-//
-//         ~Cleanup()
-//         {
-//             started.set_value();
-//             release.wait();
-//         }
-//     };
-//
-//     std::promise<void> cleanupStarted;
-//     std::promise<void> releaseCleanup;
-//     std::promise<void> releaseTask;
-//     auto cleanup = std::shared_ptr<Cleanup>(new Cleanup{cleanupStarted, releaseCleanup.get_future().share()});
-//     auto taskGate = releaseTask.get_future().share();
-//     queue.enqueueHostFn([cleanup, taskGate] { taskGate.wait(); });
-//     // Leave the queued callback as the last owner before allowing its body to return.
-//     cleanup.reset();
-//     releaseTask.set_value();
-//     cleanupStarted.get_future().wait();
-//
-//     // Popping the task before destroying its capture makes the queue look empty.
-//     // The empty-queue shortcut then lets wait(queue) return while cleanup is blocked.
-//     auto waiter = std::async(std::launch::async, [&] { onHost::wait(queue); });
-//     auto const waitStatus = waiter.wait_for(blockingInterval);
-//     releaseCleanup.set_value();
-//     waiter.get();
-//
-//     // Original regression expectation is disabled for this accepted completion contract.
-//     // CHECK(waitStatus == std::future_status::timeout);
-//     CHECK(waitStatus == std::future_status::ready);
-// }
-//
 // TEST_CASE("host nonblocking queue wait does not propagate callback failures", "[queue]")
 // {
 //     auto device = onHost::makeHostDevice();
