@@ -53,6 +53,31 @@ namespace
         }
     };
 
+    template<typename T_Device>
+    struct ReRecordingScenario
+    {
+        using BlockingQueue = decltype(std::declval<T_Device&>().makeQueue(queueKind::blocking));
+        using NonBlockingQueue = decltype(std::declval<T_Device&>().makeQueue(queueKind::nonBlocking));
+        using Event = decltype(std::declval<T_Device&>().makeEvent());
+
+        T_Device device;
+        NonBlockingQueue producer;
+        BlockingQueue consumer;
+        Event event;
+
+        std::promise<void> releaseProducer;
+        std::promise<void> waitStarted;
+        std::promise<void> recordStarted;
+
+        ReRecordingScenario()
+            : device(onHost::makeHostDevice())
+            , producer(device.makeQueue(queueKind::nonBlocking))
+            , consumer(device.makeQueue(queueKind::blocking))
+            , event(device.makeEvent())
+        {
+        }
+    };
+
     /** Release a gate on destruction so a failing check cannot leave a thread blocked forever. */
     struct PromiseGate
     {
@@ -79,47 +104,94 @@ TEST_CASE("host blocking event wait allows concurrent re-recording", "[queue]")
 {
     // Producer: gate -> E1. Consumer: wait(E1) -> E2, using the same event object.
     // Re-recording must leave the existing wait dependent on E1, not E2.
-    auto device = onHost::makeHostDevice();
-    auto producer = device.makeQueue(queueKind::nonBlocking);
-    auto consumer = device.makeQueue(queueKind::blocking);
-    auto event = device.makeEvent();
+    using Device = decltype(onHost::makeHostDevice());
+    auto scenario = std::make_unique<ReRecordingScenario<Device>>();
+    auto& state = *scenario;
+    PromiseGate releaseProducer{state.releaseProducer};
 
-    std::promise<void> releaseProducer;
-    auto producerGate = releaseProducer.get_future().share();
-    producer.enqueueHostFn([producerGate] { producerGate.wait(); });
-    producer.enqueue(event);
+    auto const producerGate = state.releaseProducer.get_future().share();
+    state.producer.enqueueHostFn([producerGate] { producerGate.wait(); });
+    state.producer.enqueue(state.event);
 
-    std::promise<void> waitStarted;
-    auto waiter = std::async(
+    auto waiter = std::make_unique<std::future<void>>(std::async(
         std::launch::async,
-        [&]
+        [&state]
         {
-            waitStarted.set_value();
-            consumer.waitFor(event);
-        });
-    waitStarted.get_future().wait();
-    auto const waitStatus = waiter.wait_for(blockingInterval);
+            state.waitStarted.set_value();
+            state.consumer.waitFor(state.event);
+        }));
+    CHECK(state.waitStarted.get_future().wait_for(startupTimeout) == std::future_status::ready);
 
-    std::promise<void> recordStarted;
-    auto recorder = std::async(
+    // waitFor publishes its pending dependency before blocking. Observe that publication from a
+    // separate thread: a regression that holds the queue lock across the wait hides it and hits the
+    // deadline instead of blocking this thread on the queue lock.
+    auto waitEntryObserver = std::make_unique<std::future<bool>>(std::async(
         std::launch::async,
-        [&]
+        [&state]
         {
-            recordStarted.set_value();
-            consumer.enqueue(event);
-        });
-    recordStarted.get_future().wait();
-    recorder.wait_for(blockingInterval);
+            auto const deadline = std::chrono::steady_clock::now() + startupTimeout;
+            while(state.consumer.isEmpty() && std::chrono::steady_clock::now() < deadline)
+                std::this_thread::sleep_for(std::chrono::milliseconds{1});
+            return !state.consumer.isEmpty();
+        }));
+    bool waitEntered = false;
+    if(waitEntryObserver->wait_for(startupTimeout) == std::future_status::ready)
+    {
+        waitEntered = waitEntryObserver->get();
+    }
+    else
+    {
+        // Release the dependency so the observer can finish, then report the missing proof.
+        releaseProducer.release();
+        waitEntryObserver->get();
+    }
+    waitEntryObserver.reset();
 
-    releaseProducer.set_value();
+    // The producer gate still holds E1, so a waiter that entered waitFor must stay blocked.
+    auto const waitStatus = waiter->wait_for(std::chrono::milliseconds{0});
+    CHECK(waitEntered);
+    CHECK_FALSE(state.event.isComplete());
+    CHECK(waitStatus == std::future_status::timeout);
+
+    auto recorder = std::make_unique<std::future<void>>(std::async(
+        std::launch::async,
+        [&state]
+        {
+            state.recordStarted.set_value();
+            state.consumer.enqueue(state.event);
+        }));
+    CHECK(state.recordStarted.get_future().wait_for(startupTimeout) == std::future_status::ready);
+    // Re-recording must finish while the waiter is still blocked on E1.
+    bool const reRecorded = recorder->wait_for(startupTimeout) == std::future_status::ready;
+    CHECK(reRecorded);
+
+    releaseProducer.release();
     // Releasing the gate must allow E1 -> consumer wait -> E2 to finish.
     // Regression: recorder holds the event lock while waiting for the consumer
     // lock; the consumer holds its lock while E1 needs the event lock to finish.
-    waiter.get();
-    recorder.get();
-    onHost::wait(producer);
-    CHECK(waitStatus == std::future_status::timeout);
-    CHECK(event.isComplete());
+    auto const waiterStatus = waiter->wait_for(crossQueueWatchdog);
+    auto const recorderStatus = recorder->wait_for(crossQueueWatchdog);
+    CHECK(waiterStatus == std::future_status::ready);
+    CHECK(recorderStatus == std::future_status::ready);
+    CHECK(state.event.isComplete());
+
+    if(waiterStatus == std::future_status::ready && recorderStatus == std::future_status::ready)
+    {
+        waiter->get();
+        recorder->get();
+        onHost::wait(state.producer);
+        waiter.reset();
+        recorder.reset();
+        scenario.reset();
+    }
+    else
+    {
+        /* A deadlocked implementation can not be joined. Leak the scenario so CTest reports the failed
+         * checks instead of hanging in a future destructor. */
+        waiter.release();
+        recorder.release();
+        scenario.release();
+    }
 }
 
 TEST_CASE("host blocking event wait keeps the queue nonempty", "[queue]")
