@@ -531,7 +531,10 @@ namespace alpaka::onHost
                     {
                         /* A pending dependency counts as unfinished blocking work but the queue mutex is only
                          * held while the bookkeeping is updated. Holding it across future.get() would prevent an
-                         * event producer that needs this queue from making progress.
+                         * event producer that needs this queue from making progress. Publishing the pending depth
+                         * before unlocking lets other threads' blocking submissions and enqueues proceed while the
+                         * dependency is unresolved; wait(queue) and isEmpty() still report the queue as busy until
+                         * this wait returns.
                          */
                         std::unique_lock<std::recursive_mutex> queueLock(queue.m_mutex);
                         typename cpu::Queue<T_Device>::BlockingDepthGuard depthGuard{queue, false};
