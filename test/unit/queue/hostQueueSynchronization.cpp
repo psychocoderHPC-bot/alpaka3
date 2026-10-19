@@ -373,8 +373,8 @@ TEST_CASE("host nonblocking queue state outlives a deferred finalize", "[queue]"
     auto const policies = onHost::QueuePolicyList{queueKind::nonBlocking};
     using QueueWrapper = onHost::Queue<onHost::Device<api::Host, deviceKind::Cpu>, ALPAKA_TYPEOF(policies)>;
 
-    /* Construct the internal queue directly so no device-side weak_ptr keeps the shared control block
-     * allocated after the queue object is destroyed; that makes the use-after-free visible to ASan. */
+    /* Construct the internal queue directly so it is not registered in the device wait list. The callback
+     * then releases the only queue handle inside the task, which makes the use-after-free visible to ASan. */
     auto queue = std::make_unique<QueueWrapper>(
         std::make_shared<onHost::cpu::Queue<DeviceType>>(device, 0u, onHost::internal::hwloc::allDomains, policies),
         policies);

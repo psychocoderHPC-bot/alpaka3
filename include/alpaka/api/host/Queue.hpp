@@ -290,8 +290,9 @@ namespace alpaka::onHost
 
             /** execute a task in the queue
              *
-             * @attention Do NOT enqueue a task which captures the queue internally to keep the queue alive as
-             * dependency. In this case the destructure of the queue is not called.
+             * @attention A task which captures the queue keeps it alive. With a shared capture the queue is
+             * destroyed after the task's captures are released on the thread executing the task. A blocking
+             * callback runs before the submission returns, so the caller still holds the queue.
              */
             void enqueueHostFn(auto const& task)
             {
