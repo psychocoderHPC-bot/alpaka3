@@ -10,6 +10,9 @@
 #include <chrono>
 #include <cstdint>
 #include <future>
+#include <memory>
+#include <thread>
+#include <utility>
 
 using namespace alpaka;
 
@@ -19,6 +22,56 @@ namespace
     // CTest's separate timeout detects failure to finish after releasing it.
     // The started promises precede API entry; this delay only encourages the interleaving.
     constexpr auto blockingInterval = std::chrono::milliseconds{100};
+    // Generous upper bound so a regression surfaces as a failed check instead of a hung test process.
+    constexpr auto crossQueueWatchdog = std::chrono::milliseconds{5000};
+    constexpr auto startupTimeout = std::chrono::milliseconds{2000};
+
+    template<typename T_Device>
+    struct CrossQueueWaitScenario
+    {
+        using BlockingQueue = decltype(std::declval<T_Device&>().makeQueue(queueKind::blocking));
+        using NonBlockingQueue = decltype(std::declval<T_Device&>().makeQueue(queueKind::nonBlocking));
+        using Event = decltype(std::declval<T_Device&>().makeEvent());
+
+        T_Device device;
+        BlockingQueue waitingQueue;
+        BlockingQueue producingQueue;
+        NonBlockingQueue recordingQueue;
+        Event event;
+
+        std::promise<void> releaseEventTask;
+        std::promise<void> waitEntered;
+
+        CrossQueueWaitScenario()
+            : device(onHost::makeHostDevice())
+            , waitingQueue(device.makeQueue(queueKind::blocking))
+            , producingQueue(device.makeQueue(queueKind::blocking))
+            , recordingQueue(device.makeQueue(queueKind::nonBlocking))
+            , event(device.makeEvent())
+        {
+        }
+    };
+
+    /** Release a gate on destruction so a failing check cannot leave a thread blocked forever. */
+    struct PromiseGate
+    {
+        std::promise<void>& promise;
+        bool released = false;
+
+        ~PromiseGate()
+        {
+            release();
+        }
+
+        void release()
+        {
+            if(!released)
+            {
+                released = true;
+                promise.set_value();
+            }
+        }
+    };
 } // namespace
 
 TEST_CASE("host blocking event wait allows concurrent re-recording", "[queue]")
@@ -146,6 +199,66 @@ TEST_CASE("host queue wait includes callback destruction", "[queue]")
     waiter.get();
 
     CHECK(waitStatus == std::future_status::timeout);
+}
+
+TEST_CASE("host blocking event wait lets the event producer enter the queue", "[queue]")
+{
+    // Queue A waits on an event recorded on a non-blocking queue. The recording task needs
+    // queue A's execution slot before it can complete, so holding A's lock across the wait
+    // deadlocks. The producer task is held behind a gate and the wait is bounded by watchdogs.
+    using Device = decltype(onHost::makeHostDevice());
+    auto scenario = std::make_unique<CrossQueueWaitScenario<Device>>();
+    auto& state = *scenario;
+    PromiseGate releaseEventTask{state.releaseEventTask};
+
+    state.recordingQueue.enqueueHostFn(
+        [&state]
+        {
+            state.releaseEventTask.get_future().wait();
+            state.producingQueue.enqueueHostFn([&state] { state.waitingQueue.enqueueHostFn([] {}); });
+        });
+    state.recordingQueue.enqueue(state.event);
+
+    auto waiter = std::make_unique<std::future<void>>(std::async(
+        std::launch::async,
+        [&state]
+        {
+            state.waitEntered.set_value();
+            state.waitingQueue.waitFor(state.event);
+        }));
+
+    bool const entered = state.waitEntered.get_future().wait_for(startupTimeout) == std::future_status::ready;
+
+    // Wait until waitFor has registered the dependency as pending blocking work.
+    bool dependencyPending = false;
+    auto const dependencyDeadline = std::chrono::steady_clock::now() + startupTimeout;
+    while(!dependencyPending && std::chrono::steady_clock::now() < dependencyDeadline)
+    {
+        dependencyPending = !state.waitingQueue.isEmpty();
+        if(!dependencyPending)
+            std::this_thread::sleep_for(std::chrono::milliseconds{1});
+    }
+
+    releaseEventTask.release();
+    auto const status = waiter->wait_for(crossQueueWatchdog);
+
+    CHECK(entered);
+    CHECK(dependencyPending);
+    CHECK(status == std::future_status::ready);
+
+    if(status == std::future_status::ready)
+    {
+        waiter->get();
+        waiter.reset();
+        scenario.reset();
+    }
+    else
+    {
+        /* The buggy implementation leaves the waiter and the producer blocked. Keep their state alive so the
+         * watchdog can report the failure without joining the deadlocked thread. */
+        waiter.release();
+        scenario.release();
+    }
 }
 
 // The following cases document accepted limitations and are intentionally disabled.

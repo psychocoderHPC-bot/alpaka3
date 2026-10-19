@@ -24,10 +24,12 @@
 #include "alpaka/onHost/internal/interface.hpp"
 #include "alpaka/onHost/mem/SharedBuffer.hpp"
 
+#include <condition_variable>
 #include <cstdint>
 #include <cstring>
 #include <future>
 #include <mutex>
+#include <thread>
 
 namespace alpaka::onHost
 {
@@ -94,6 +96,19 @@ namespace alpaka::onHost
              */
             std::atomic<uint32_t> m_blockingTaskExecutionDepth{0u};
 
+            /** Number of blocking tasks which are currently executed on this queue. */
+            uint32_t m_executingTaskDepth{0u};
+
+            /** Thread id of the task which currently executes on this queue.
+             *
+             * It is used to detect a nested same-thread operation, which must not wait for the task it is
+             * executed from.
+             */
+            std::thread::id m_executingTaskThreadId{};
+
+            /** Signals that a pending blocking dependency wait has finished. */
+            std::condition_variable_any m_blockingTaskCondition;
+
             /** Mutex to ensure sequential execution of tasks and operation if the queue is blocking.
              *
              * For non-blocking queue @c m_workerThread is taking care of the execution order.
@@ -102,6 +117,37 @@ namespace alpaka::onHost
              * task which already holds the lock.
              */
             std::recursive_mutex m_mutex;
+
+            /** Keep the blocking-task bookkeeping consistent on every exit path.
+             *
+             * A blocking task contributes to the execution depth, a blocking dependency wait only to the total
+             * depth. The condition is notified once the total depth reaches zero so a concurrent
+             * queue synchronization can observe that all blocking work has finished.
+             */
+            struct BlockingDepthGuard
+            {
+                Queue& queue;
+                bool executingTask;
+
+                BlockingDepthGuard(Queue& queueIn, bool executingTaskIn)
+                    : queue(queueIn)
+                    , executingTask(executingTaskIn)
+                {
+                    std::lock_guard<std::recursive_mutex> lk(queue.m_mutex);
+                    ++queue.m_blockingTaskExecutionDepth;
+                    if(executingTask && ++queue.m_executingTaskDepth == 1u)
+                        queue.m_executingTaskThreadId = std::this_thread::get_id();
+                }
+
+                ~BlockingDepthGuard()
+                {
+                    std::lock_guard<std::recursive_mutex> lk(queue.m_mutex);
+                    if(executingTask && --queue.m_executingTaskDepth == 0u)
+                        queue.m_executingTaskThreadId = std::thread::id{};
+                    if(--queue.m_blockingTaskExecutionDepth == 0u)
+                        queue.m_blockingTaskCondition.notify_all();
+                }
+            };
 
             /** Submit a task to the queue.
              *
@@ -117,19 +163,8 @@ namespace alpaka::onHost
                 if(m_isBlocking)
                 {
                     std::lock_guard<std::recursive_mutex> lk(m_mutex);
-                    ++m_blockingTaskExecutionDepth;
-
-                    /* Decrement on every exit path, also if fn() throws, so that the depth always reflects the
-                     * number of blocking tasks which are currently executed. */
-                    struct DepthGuard
-                    {
-                        std::atomic<uint32_t>& depth;
-
-                        ~DepthGuard()
-                        {
-                            --depth;
-                        }
-                    } depthGuard{m_blockingTaskExecutionDepth};
+                    /* Keep the depth and the executing thread consistent on every exit path, also if fn() throws. */
+                    BlockingDepthGuard depthGuard{*this, true};
 
                     fn();
                     // silent tsan warnings: The promise is fulfilled directly and only a future which is true is
@@ -316,10 +351,22 @@ namespace alpaka::onHost
             void operator()(cpu::Queue<T_Device>& queue) const
             {
                 ALPAKA_LOG_FUNCTION(onHost::logger::queue);
-                /* If empty -> Enqueue an empty task as marker and wait for the future
-                 * else there is no need to wait
-                 */
-                if(queue.isQueueEmpty() == false)
+                if(queue.m_isBlocking)
+                {
+                    /* Wait until all blocking work, including a pending dependency wait, has finished. A nested
+                     * same-thread call must not wait for the task it is executed from.
+                     */
+                    std::unique_lock<std::recursive_mutex> lk(queue.m_mutex);
+                    bool const nested = queue.m_executingTaskDepth != 0u
+                                        && queue.m_executingTaskThreadId == std::this_thread::get_id();
+                    if(!nested)
+                    {
+                        queue.m_blockingTaskCondition.wait(
+                            lk,
+                            [&queue] { return queue.m_blockingTaskExecutionDepth.load() == 0u; });
+                    }
+                }
+                else if(queue.isQueueEmpty() == false)
                 {
                     // Queue synchronization does not propagate preceding callback failures.
                     queue.submit([]() {}).wait();
@@ -417,24 +464,13 @@ namespace alpaka::onHost
                 {
                     if(queue.m_isBlocking)
                     {
-                        /* a blocking queue must acquire this lock to ensure that all pending host tasks
-                         * have finished
+                        /* A pending dependency counts as unfinished blocking work but the queue mutex is only
+                         * held while the bookkeeping is updated. Holding it across future.get() would prevent an
+                         * event producer that needs this queue from making progress.
                          */
-                        std::lock_guard<std::recursive_mutex> queueLock(queue.m_mutex);
-                        ++queue.m_blockingTaskExecutionDepth;
-
-                        /* An event dependency counts as unfinished work until the direct wait returns.
-                         * Restore the depth also if future.get() throws, so queue synchronization remains usable.
-                         */
-                        struct DepthGuard
-                        {
-                            std::atomic<uint32_t>& depth;
-
-                            ~DepthGuard()
-                            {
-                                --depth;
-                            }
-                        } depthGuard{queue.m_blockingTaskExecutionDepth};
+                        std::unique_lock<std::recursive_mutex> queueLock(queue.m_mutex);
+                        typename cpu::Queue<T_Device>::BlockingDepthGuard depthGuard{queue, false};
+                        queueLock.unlock();
 
                         // Execute directly in the caller thread; no submitted task or ready future is needed.
                         oldFuture.get();
