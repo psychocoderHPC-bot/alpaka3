@@ -94,7 +94,7 @@ namespace alpaka::onHost
              * It is declared before @c m_sharedCallbackThread so that it stays alive while the callback
              * thread drains pending tasks during destruction.
              */
-            std::recursive_mutex m_mutex;
+            mutable std::recursive_mutex m_mutex;
 
             /** First exception thrown by a callback of a non-blocking queue.
              *
@@ -348,7 +348,10 @@ namespace alpaka::onHost
                 ALPAKA_LOG_FUNCTION(onHost::logger::queue);
                 if(m_isBlocking)
                 {
-                    // check if the queue is currently executing a blocking task
+                    /* Read the depth under the mutex which publishes it, so a concurrent increment is
+                     * observed consistently with the waiter's bookkeeping. The mutex is recursive because
+                     * isQueueEmpty() can be called from within a blocking task. */
+                    std::lock_guard<std::recursive_mutex> lk(m_mutex);
                     return m_blockingTaskExecutionDepth.load() == 0u;
                 }
                 else

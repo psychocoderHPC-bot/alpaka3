@@ -147,7 +147,15 @@ TEST_CASE("host blocking event wait keeps the queue nonempty", "[queue]")
         });
     waitStarted.get_future().wait();
     auto const eventWaitStatus = eventWaiter.wait_for(blockingInterval);
-    bool const emptyWhileWaiting = consumer.isEmpty();
+
+    // The waiting thread publishes its pending depth after entering the queue. Retry briefly until that
+    // publication is observable; a single sample would race the publication and could fail on correct code.
+    auto const pendingDeadline = std::chrono::steady_clock::now() + startupTimeout;
+    while(consumer.isEmpty() && std::chrono::steady_clock::now() < pendingDeadline)
+        std::this_thread::sleep_for(std::chrono::milliseconds{1});
+
+    // The producer gate still holds the dependency wait, so the queue must stay nonempty.
+    CHECK_FALSE(consumer.isEmpty());
 
     // Queue synchronization must stay blocked for the same dependency.
     auto queueWaiter = std::async(std::launch::async, [&] { onHost::wait(consumer); });
@@ -158,7 +166,6 @@ TEST_CASE("host blocking event wait keeps the queue nonempty", "[queue]")
     onHost::wait(producer);
 
     CHECK(eventWaitStatus == std::future_status::timeout);
-    CHECK_FALSE(emptyWhileWaiting);
     CHECK(queueWaitStatus == std::future_status::timeout);
 }
 
