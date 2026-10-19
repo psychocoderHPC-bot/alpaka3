@@ -77,7 +77,11 @@ function(alpaka_add_test_target target_prefix folder)
                     alpaka_finalize(${_test_target_name})
                     set(_test_properties)
                     if(_test_target_name STREQUAL "unit_test_queue_hostQueueSynchronization")
-                        set(_test_properties PROPERTIES TIMEOUT 10)
+                        # The host synchronization tests gate worker threads and wait with bounded
+                        # watchdogs (up to 5 s per stage), so allow them to report a failed assertion
+                        # before CTest kills the process. The OpenMP queue tests request three
+                        # threads explicitly via num_threads(3).
+                        set(_test_properties PROPERTIES TIMEOUT 30)
                     endif()
                     catch_discover_tests(${_test_target_name} EXTRA_ARGS "-w" "NoAssertions" ${_test_properties})
                 endif()
