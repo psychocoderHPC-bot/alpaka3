@@ -328,6 +328,11 @@ namespace alpaka::onHost
 
     /** copy data byte wise from a container or host pointer to global device memory
      *
+     * The copy always transfers the whole device global object. The extents of the source are ignored. When the source
+     * size is known at compile time a source that is too small is rejected by a static assertion. For raw pointers and
+     * sources with dynamic extents the caller must ensure that the source provides at least the size of the device
+     * global object in bytes. Copies between device global objects are not supported.
+     *
      * @param queue the copy will be executed after all previous work in this queue is finished
      * @param[in,out] dest must be device global memory on the device of the queue the data should be written to
      * @param[in] source can be a container/view or host accessible pointer from which the data will be copied
@@ -338,6 +343,10 @@ namespace alpaka::onHost
         onAcc::internal::GlobalDeviceMemoryWrapper<T_Storage, T> dest,
         auto&& source)
     {
+        static_assert(
+            internal::detail::hasSufficientSizeFor<ALPAKA_TYPEOF(source), T>(),
+            "The source provides fewer bytes than the device global object. A copy to device global memory always "
+            "transfers the complete object.");
         internal::MemcpyDeviceGlobal::Op<
             std::decay_t<decltype(*queue.get())>,
             onAcc::internal::GlobalDeviceMemoryWrapper<T_Storage, T>,
@@ -345,6 +354,12 @@ namespace alpaka::onHost
     }
 
     /** copy data byte wise from global device memory to a container or host pointer
+     *
+     * The copy always transfers the whole device global object. The extents of the destination are ignored and are not
+     * used to perform a partial update. When the destination size is known at compile time a destination that is too
+     * small is rejected by a static assertion. For raw pointers and destinations with dynamic extents the caller must
+     * ensure that the destination provides at least the size of the device global object in bytes. Copies between
+     * device global objects are not supported.
      *
      * @param queue the copy will be executed after all previous work in this queue is finished
      * @param[in,out] dest can be a container/view or host accessible pointer the data should be written to
@@ -356,6 +371,10 @@ namespace alpaka::onHost
         auto&& dest,
         onAcc::internal::GlobalDeviceMemoryWrapper<T_Storage, T> source)
     {
+        static_assert(
+            internal::detail::hasSufficientSizeFor<ALPAKA_TYPEOF(dest), T>(),
+            "The destination provides fewer bytes than the device global object. A copy from device global memory "
+            "always transfers the complete object.");
         internal::MemcpyDeviceGlobal::Op<
             std::decay_t<decltype(*queue.get())>,
             std::decay_t<decltype(dest)>,

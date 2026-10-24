@@ -8,6 +8,8 @@
 #include <catch2/catch_template_test_macros.hpp>
 #include <catch2/catch_test_macros.hpp>
 
+#include <array>
+
 using namespace alpaka;
 using namespace alpaka::onHost;
 
@@ -71,6 +73,35 @@ struct DeviceGlobalMemKernelCArray2D
         }
     }
 };
+
+TEST_CASE("device global memcpy buffer size check", "[deviceGlobalMem]")
+{
+    using alpaka::onHost::internal::detail::hasSufficientSizeFor;
+    using alpaka::onHost::internal::detail::staticByteSize;
+
+    // Host to device: the source has exactly the size of the device global object.
+    STATIC_REQUIRE(hasSufficientSizeFor<std::array<uint32_t, 4u>, uint32_t[4u]>());
+    // A larger source is accepted.
+    STATIC_REQUIRE(hasSufficientSizeFor<std::array<uint32_t, 5u>, uint32_t[4u]>());
+    // A smaller source is rejected.
+    STATIC_REQUIRE_FALSE(hasSufficientSizeFor<std::array<uint32_t, 3u>, uint32_t[4u]>());
+    // Device to host: the destination must be large enough as well.
+    STATIC_REQUIRE(hasSufficientSizeFor<std::array<uint32_t, 4u>, uint32_t[4u]>());
+    STATIC_REQUIRE_FALSE(hasSufficientSizeFor<std::array<uint32_t, 3u>, uint32_t[4u]>());
+    // C arrays are checked as well.
+    STATIC_REQUIRE(hasSufficientSizeFor<uint32_t[4u], uint32_t[4u]>());
+    STATIC_REQUIRE_FALSE(hasSufficientSizeFor<uint32_t[3u], uint32_t[4u]>());
+    // A view with compile-time extents exposes its size via getExtents().
+    STATIC_REQUIRE(hasSufficientSizeFor<alpaka::MdSpanArray<uint32_t[4u], size_t>, uint32_t[4u]>());
+    STATIC_REQUIRE_FALSE(hasSufficientSizeFor<alpaka::MdSpanArray<uint32_t[3u], size_t>, uint32_t[4u]>());
+    // Raw pointers have no known size and are accepted.
+    STATIC_REQUIRE(hasSufficientSizeFor<uint32_t const*, uint32_t[4u]>());
+    STATIC_REQUIRE_FALSE(staticByteSize<uint32_t const*>().known);
+    // An empty source has a known size of zero and is rejected, not treated as unknown.
+    STATIC_REQUIRE(staticByteSize<std::array<uint32_t, 0u>>().known);
+    STATIC_REQUIRE(staticByteSize<std::array<uint32_t, 0u>>().bytes == 0u);
+    STATIC_REQUIRE_FALSE(hasSufficientSizeFor<std::array<uint32_t, 0u>, uint32_t>());
+}
 
 TEMPLATE_LIST_TEST_CASE("device global mem", "", TestApis)
 {
