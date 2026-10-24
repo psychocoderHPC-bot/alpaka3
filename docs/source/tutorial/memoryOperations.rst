@@ -61,6 +61,23 @@ All memory operations support any dimension ``>=1``.
     :dedent:
 
 
+Device Global Memory
+--------------------
+
+Variables declared with ``ALPAKA_DEVICE_GLOBAL`` can be copied with ``alpaka::onHost::memcpy()``.
+A copy between host memory and a device global variable always transfers the complete object.
+The device global overloads do not take an extent, and the extents of the other side are ignored.
+A partially sized view or container is therefore not a partial update of the device global variable.
+
+The source of a host to device copy and the destination of a device to host copy must provide at least the size of
+the device global object in bytes.
+When alpaka can determine that size at compile time, for example for C arrays, ``std::array``, or views with a
+compile-time extent, a buffer that is too small is rejected by a static assertion.
+For raw pointers and buffers with dynamic extents the caller must ensure that the buffer is large enough.
+
+Copies between two device global variables are not supported.
+One side of a device global copy must be host memory.
+
 Complete Source File
 --------------------
 

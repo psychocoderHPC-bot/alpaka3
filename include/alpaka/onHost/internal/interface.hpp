@@ -16,6 +16,9 @@
 #include "alpaka/onHost/ThreadSpec.hpp"
 #include "alpaka/tag.hpp"
 
+#include <array>
+#include <utility>
+
 namespace alpaka::onAcc::internal
 {
     // forward declaration to avoid cyclic includes
@@ -413,6 +416,65 @@ namespace alpaka::onHost
                 void operator()(T_Queue& queue, auto&&, T_Source const&, T_Extents const&) const;
             };
         };
+
+        namespace detail
+        {
+            template<typename T>
+            struct IsStdArray : std::false_type
+            {
+            };
+
+            template<typename T, size_t T_size>
+            struct IsStdArray<std::array<T, T_size>> : std::true_type
+            {
+            };
+
+            template<typename T>
+            inline constexpr bool isStdArray_v = IsStdArray<T>::value;
+
+            /** Byte size of a memcpy argument if the size is known at compile time. */
+            struct StaticByteSize
+            {
+                bool known = false;
+                size_t bytes = 0u;
+            };
+
+            template<typename T_Arg>
+            consteval StaticByteSize staticByteSize()
+            {
+                using Arg = std::remove_cvref_t<T_Arg>;
+                if constexpr(std::is_pointer_v<Arg>)
+                    return {false, 0u};
+                else if constexpr(std::is_array_v<Arg>)
+                    return {true, sizeof(Arg)};
+                else if constexpr(isStdArray_v<Arg>)
+                    return {true, std::tuple_size<Arg>::value * sizeof(typename Arg::value_type)};
+                else if constexpr(
+                    requires(Arg const& arg) { arg.getExtents(); }
+                    && requires { typename alpaka::GetValueType_t<Arg>; })
+                {
+                    using Extents = ALPAKA_TYPEOF(std::declval<Arg const&>().getExtents());
+                    if constexpr(alpaka::isCVector_v<Extents>)
+                        return {true, Extents{}.product() * sizeof(alpaka::GetValueType_t<Arg>)};
+                    else
+                        return {false, 0u};
+                }
+                else
+                    return {false, 0u};
+            }
+
+            /** Check that a memcpy argument provides at least the bytes of a device global object.
+             *
+             * Arguments whose size is unknown at compile time are accepted because the caller is responsible for
+             * providing enough bytes.
+             */
+            template<typename T_Arg, typename T>
+            consteval bool hasSufficientSizeFor()
+            {
+                constexpr StaticByteSize argSize = staticByteSize<T_Arg>();
+                return !argSize.known || argSize.bytes >= sizeof(T);
+            }
+        } // namespace detail
 
         struct MemcpyDeviceGlobal
         {
