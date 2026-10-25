@@ -63,21 +63,25 @@ namespace alpaka::onHost
     /** Operand supply policy of the register-blocked GEMM path.
      *
      * direct keeps the M3 path that reads A and B from global memory in the K loop. cooperative stages one A/B
-     * panel per K block in block-shared memory and reads the register-blocked outer product from there. automatic
-     * resolves to the compile-time configuration value @ref internal::defaultGemmStaging, so the shipped default is
-     * the direct path and no measurement is required to select it.
+     * panel per K block in block-shared memory and reads the register-blocked outer product from there. asynchronous
+     * is reserved: it selects the same bounded pipeline and currently executes the synchronous implementation, so it
+     * becomes distinct only when a capable, tested asynchronous copy primitive is available. automatic resolves to
+     * the compile-time configuration value @ref internal::defaultGemmStaging, so the shipped default is the direct
+     * path and no measurement is required to select it.
      */
     enum class GemmStaging : std::uint8_t
     {
         automatic,
         direct,
-        cooperative
+        cooperative,
+        /** Reserved asynchronous stage policy; maps to cooperative until a native copy primitive is wired in. */
+        asynchronous
     };
 
     /** Staging selection and depth for the register-blocked GEMM path.
      *
-     * stages is the synchronous ring depth of the cooperative policy and must be in {1, 2, 3}. It is ignored by the
-     * direct policy.
+     * stages is the ring depth of the cooperative and asynchronous policies and must be in {1, 2, 3}. It is ignored
+     * by the direct policy.
      */
     struct GemmStagingConfig
     {

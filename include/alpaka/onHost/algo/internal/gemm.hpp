@@ -755,6 +755,11 @@ namespace alpaka::onHost
             using Api = std::remove_cvref_t<decltype(queue.getApi())>;
             using DeviceKind = std::remove_cvref_t<decltype(queue.getDeviceKind())>;
 
+            // The asynchronous policy is reserved: route it to the synchronous cooperative pipeline so it is
+            // selectable today without changing the schedule, transitions or results.
+            if(staging.policy == GemmStaging::asynchronous)
+                staging.policy = GemmStaging::cooperative;
+
             std::uint64_t const m = asU64(c.rows, "M");
             std::uint64_t const n = asU64(c.cols, "N");
             std::uint64_t const k = asU64(a.cols, "K");

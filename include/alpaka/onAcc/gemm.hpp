@@ -11,6 +11,7 @@
 #include "alpaka/core/common.hpp"
 #include "alpaka/onAcc/Acc.hpp"
 #include "alpaka/onAcc/fragment.hpp"
+#include "alpaka/onAcc/gemmPipeline.hpp"
 #include "alpaka/onAcc/lockstep.hpp"
 #include "alpaka/onAcc/staging.hpp"
 #include "alpaka/tag.hpp"
@@ -393,7 +394,8 @@ namespace alpaka::onAcc::gemm
                     // Fill one K block cooperatively. Coordinates are tested before the load; an invalid halo entry
                     // becomes an exact zero. The loop is strided by the worker index, so a single-thread executor
                     // fills the complete panel itself and a cooperative phase never waits for an unscheduled worker.
-                    auto const fillBatch = [&](uint64_t batch, typename staging::StageTracker<T_STAGES>::Token token)
+                    auto const fillBatch
+                        = [&](uint64_t batch, typename staging::StageTracker<T_STAGES>::Token token, pipeline::Phase)
                     {
                         auto const panels = panelOf(token);
                         uint64_t const k0 = batch * static_cast<uint64_t>(T_BK);
@@ -421,21 +423,12 @@ namespace alpaka::onAcc::gemm
                         }
                     };
 
-                    uint64_t const fullBatches = k / static_cast<uint64_t>(T_BK);
-                    uint64_t const batchCount = fullBatches + (k % static_cast<uint64_t>(T_BK) != 0u ? 1u : 0u);
-                    uint64_t const prologue = std::min<std::uint64_t>(T_STAGES, batchCount);
-
-                    for(uint64_t i = 0u; i < prologue; ++i)
+                    // One steady-state compute step reads a committed panel. The phase argument documents whether
+                    // the step overlaps a refill (steady state) or belongs to the final drain.
+                    auto const computeBatch
+                        = [&](uint64_t, typename staging::StageTracker<T_STAGES>::Token token, pipeline::Phase phase)
                     {
-                        auto const token = stages.acquire();
-                        fillBatch(i, token);
-                        stages.commit(acc, token);
-                    }
-                    for(uint64_t i = 0u; i < batchCount; ++i)
-                    {
-                        auto const token = stages.tracker.tokenOf(i);
-                        stages.waitReady(acc, token);
-                        stages.consume(token);
+                        alpaka::unused(phase);
                         auto const panels = panelOf(token);
                         for(uint32_t kk = 0u; kk < T_BK; ++kk)
                         {
@@ -443,16 +436,13 @@ namespace alpaka::onAcc::gemm
                             operands.loadRow(panels.b, kk, ownership.workerCol * T_TN, T_BK, blockN);
                             multiplyLoadedOperands();
                         }
-                        stages.complete(acc, token);
-                        stages.release(token);
-                        if(i + T_STAGES < batchCount)
-                        {
-                            auto const next = stages.acquire();
-                            fillBatch(i + T_STAGES, next);
-                            stages.commit(acc, next);
-                        }
-                    }
-                    ALPAKA_ASSERT_ACC(stages.tracker.allFree());
+                    };
+
+                    uint64_t const fullBatches = k / static_cast<uint64_t>(T_BK);
+                    bool const partialBatch = k % static_cast<uint64_t>(T_BK) != 0u;
+                    pipeline::BoundedStagePipeline<pipeline::StagePolicy::synchronous, T_STAGES, decltype(stages)>
+                        pipe{stages};
+                    pipe.run(acc, fullBatches, partialBatch, fillBatch, computeBatch);
                 }
 
                 fragment::staticFor<0u, Layout::slotCount>(
