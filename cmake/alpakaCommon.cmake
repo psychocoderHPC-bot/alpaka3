@@ -217,6 +217,18 @@ if(NOT _alpaka_TARGETS_EXTENDED)
         alpaka_set_compiler_options(HOST target alpaka_target_host "$<$<COMPILE_LANGUAGE:CXX>:SHELL:-fconcepts-diagnostics-depth=${alpaka_GCC_CONCEPT_DEPTH}>")
     endif()
 
+    ## The Intel C++ compilers (icx/icpx) flush FP32 denormals to zero in host code by default.
+    ## Stored FP16/BFloat16 GEMM inputs widen to exact FP32 values, and BF16 subnormals become
+    ## FP32 denormals, so pin IEEE-754 host FP32 semantics unless the user explicitly requested
+    ## fast math or flush-to-zero.
+    if(
+        CMAKE_CXX_COMPILER_ID MATCHES "^(Intel|IntelLLVM)$"
+        AND NOT (alpaka_FAST_MATH STREQUAL "ON" OR alpaka_FTZ STREQUAL "ON")
+    )
+        alpaka_set_compiler_options(HOST target alpaka_target_host "$<$<COMPILE_LANGUAGE:CXX>:SHELL:-ffp-model=precise>")
+        message(STATUS "Intel C++ host compiler detected: pinned host FP32 semantics to -ffp-model=precise")
+    endif()
+
     ## HWLOC
     include(${_alpaka_CMAKE_DIR}/alpakaHwloc.cmake)
 

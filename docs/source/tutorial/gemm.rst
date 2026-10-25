@@ -83,6 +83,12 @@ The accumulation type is selected by the mode.
 The reference tolerance model lives in ``validation/numerics/tolerance.hpp`` and the kernel tests compare against an
 independent higher-precision reference on each supported layout and transpose combination.
 FP16 and BF16 inputs contribute their exact FP32 value to the FP32 accumulation.
+The value stays exact also inside the FP32 subnormal range: BF16 subnormal inputs widen to FP32 subnormals and
+contribute as finite FP32 operands.
+Host builds with the Intel C++ compilers (``icx``, ``icpx``) therefore pin the host FP32 semantics to
+``-ffp-model=precise``: the default host FP model of these compilers flushes FP32 denormals to zero and would
+break the contract.
+Setting ``alpaka_FAST_MATH`` or ``alpaka_FTZ`` to ``ON`` opts out of the pin and waives this guarantee.
 
 Plan diagnostics
 ----------------
