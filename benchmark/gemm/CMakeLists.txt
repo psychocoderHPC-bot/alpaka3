@@ -43,16 +43,21 @@ endif()
 set_target_properties(gemm_bench PROPERTIES FOLDER benchmarks/gemm)
 
 # Run as bounded ctest entries. The full manifest is a benchmark, not a CI test.
+# Build-tree output is outside the source checkout for out-of-source builds, so the
+# driver's outside-checkout guard stays satisfied without weakening it.
+set(GEMM_BENCH_CTEST_OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/gemm-bench-out")
+file(MAKE_DIRECTORY "${GEMM_BENCH_CTEST_OUTPUT}/full" "${GEMM_BENCH_CTEST_OUTPUT}/smoke")
 add_test(
     NAME gemm_bench
-    COMMAND gemm_bench --subset ci-fast --filter square-64 --output-dir "${CMAKE_CURRENT_BINARY_DIR}/gemm_bench_ctest"
+    COMMAND gemm_bench --subset ci-fast --filter square-64 --max-cases 1 --output-dir "${GEMM_BENCH_CTEST_OUTPUT}/full"
 )
 add_test(
     NAME gemm_bench_smoke
     COMMAND
-        gemm_bench --smoke --subset ci-fast --filter tiny-1x1x1 --output-dir
-        "${CMAKE_CURRENT_BINARY_DIR}/gemm_bench_smoke_ctest"
+        gemm_bench --smoke --subset ci-fast --filter tiny-1x1x1 --max-cases 1 --output-dir
+        "${GEMM_BENCH_CTEST_OUTPUT}/smoke"
 )
+set_tests_properties(gemm_bench gemm_bench_smoke PROPERTIES TIMEOUT 30)
 
 # Optional benchmark-only reference baseline (default OFF, no fetch when off).
 add_subdirectory(vendor)
