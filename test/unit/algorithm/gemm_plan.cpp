@@ -98,8 +98,7 @@ namespace
         facts.maxBlocksPerGrid = deviceFact(target.maxBlocksPerGrid, "maxBlocksPerGrid", "blocks");
         facts.multiProcessorCount = deviceFact(target.multiProcessorCount, "multiProcessorCount", "processors");
         facts.warpSize = deviceFact(target.warpSize, "warpSize", "threads");
-        facts.globalMemCapacityBytes
-            = deviceFact<std::uint64_t>(1ull << 34, "globalMemCapacityBytes", "bytes");
+        facts.globalMemCapacityBytes = deviceFact<std::uint64_t>(1ull << 34, "globalMemCapacityBytes", "bytes");
         return facts;
     }
 
@@ -174,26 +173,10 @@ TEST_CASE("gemm plan determinism", "[gemm][plan]")
 TEST_CASE("gemm plan selected plans pass launch validation", "[gemm][plan][property]")
 {
     std::array<std::array<std::uint64_t, 3>, 20> const shapes{{
-        {0u, 0u, 0u},
-        {0u, 5u, 3u},
-        {5u, 0u, 3u},
-        {8u, 8u, 0u},
-        {1u, 1u, 1u},
-        {1u, 1u, 7u},
-        {1u, 8u, 1u},
-        {2u, 2u, 2u},
-        {3u, 5u, 7u},
-        {4u, 4u, 4u},
-        {7u, 13u, 5u},
-        {16u, 16u, 16u},
-        {17u, 19u, 23u},
-        {1u, 1024u, 1u},
-        {1024u, 1u, 1u},
-        {33u, 1u, 17u},
-        {1u, 33u, 17u},
-        {64u, 64u, 64u},
-        {65u, 63u, 31u},
-        {128u, 7u, 129u},
+        {0u, 0u, 0u},   {0u, 5u, 3u},    {5u, 0u, 3u},    {8u, 8u, 0u},    {1u, 1u, 1u},
+        {1u, 1u, 7u},   {1u, 8u, 1u},    {2u, 2u, 2u},    {3u, 5u, 7u},    {4u, 4u, 4u},
+        {7u, 13u, 5u},  {16u, 16u, 16u}, {17u, 19u, 23u}, {1u, 1024u, 1u}, {1024u, 1u, 1u},
+        {33u, 1u, 17u}, {1u, 33u, 17u},  {64u, 64u, 64u}, {65u, 63u, 31u}, {128u, 7u, 129u},
     }};
     std::array<std::pair<onHost::GemmOp, onHost::GemmOp>, 4> const layouts{{
         {onHost::GemmOp::none, onHost::GemmOp::none},
@@ -291,10 +274,8 @@ TEST_CASE("gemm plan handles contradictory optional facts", "[gemm][plan]")
 
     SECTION("advertised register budget is contradictory but one fact set still selects")
     {
-        facts.registerBudgetBytes = deviceFact<std::uint64_t>(
-            estimatedRegisterBudgetBytes,
-            "registerBudgetBytes",
-            "bytes/worker");
+        facts.registerBudgetBytes
+            = deviceFact<std::uint64_t>(estimatedRegisterBudgetBytes, "registerBudgetBytes", "bytes/worker");
         PlanSelection const selection = selectPlan(problem, facts, family);
         CHECK(validatePlan(selection.plan, problem, facts, family).legal);
     }
@@ -408,16 +389,17 @@ TEST_CASE("gemm plan expert override rejection", "[gemm][plan][override]")
     CHECK(overridden.plan == automatic.plan);
     CHECK(overridden.diagnostics.selectedEngine.find("FMA/SIMD") != std::string::npos);
 
-    auto const expectRejected = [&](GemmPlan const& plan, GemmProblem const& problemIn, GemmFacts const& factsIn,
-                                    std::string const& needle)
+    auto const expectRejected
+        = [&](GemmPlan const& plan, GemmProblem const& problemIn, GemmFacts const& factsIn, std::string const& needle)
     {
         GemmPlanRequest request;
         request.expertOverride = plan;
         try
         {
-            (void)selectPlan(problemIn, factsIn, family, request);
+            (void) selectPlan(problemIn, factsIn, family, request);
             FAIL("expected the override to be rejected");
-        } catch(std::invalid_argument const& error)
+        }
+        catch(std::invalid_argument const& error)
         {
             INFO(error.what());
             CHECK(std::string{error.what()}.find(needle) != std::string::npos);
@@ -493,8 +475,7 @@ TEST_CASE("gemm plan diagnostics content", "[gemm][plan][diagnostics]")
 
     CHECK(selection.diagnostics.selected == selection.plan);
     CHECK(selection.diagnostics.mode == mode.mode);
-    CHECK(selection.diagnostics.stagingBytes
-          == onHost::internal::stagedBytes(selection.plan, facts.accumulatorBytes));
+    CHECK(selection.diagnostics.stagingBytes == onHost::internal::stagedBytes(selection.plan, facts.accumulatorBytes));
     CHECK(selection.diagnostics.selectedEngine.find("register-blocked") != std::string::npos);
     CHECK(selection.diagnostics.selectedScore > 0.0);
     CHECK(selection.diagnostics.registerPressureNote.find("estimate") != std::string::npos);
