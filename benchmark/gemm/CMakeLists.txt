@@ -39,3 +39,15 @@ else()
 endif()
 
 set_target_properties(gemm_bench PROPERTIES FOLDER benchmarks/gemm)
+
+# Run as bounded ctest entries. The full manifest is a benchmark, not a CI test.
+add_test(
+    NAME gemm_bench
+    COMMAND gemm_bench --subset ci-fast --filter square-64 --output-dir "${CMAKE_CURRENT_BINARY_DIR}/gemm_bench_ctest"
+)
+add_test(
+    NAME gemm_bench_smoke
+    COMMAND
+        gemm_bench --smoke --subset ci-fast --filter tiny-1x1x1 --output-dir
+        "${CMAKE_CURRENT_BINARY_DIR}/gemm_bench_smoke_ctest"
+)
