@@ -436,3 +436,37 @@ Tile selection is a bounded compile-time family. The base tile size is `bit_ceil
 Output tiles are split into the four disjoint regions of section 6: the full rectangle, the bottom strip, the right strip and the corner. Each region is a separate launch with its own tile origin; all four kernels are the same boundary-aware code. Coordinates are tested before any load. Invalid K contributes an exact zero, and invalid M/N suppresses the store. No collective exists in the kernel, so the lockstep tail callback can diverge freely.
 
 Known limitations for M2: direct global loads only, one accumulator fragment per worker without register blocking or operand reuse, no packed panels or cache macrotiles, no plan diagnostics or expert override, no native matrix path, and no GPU measurement in this change. The benchmark adapter covers strict FP32 and the FP16-to-FP32 mixed mode on the host CPU.
+
+## 19 M5 as implemented
+
+M5 adds a host-only planner in `include/alpaka/onHost/algo/internal/gemmPlan.hpp`. The public descriptors (`GemmLayout`, `GemmOp`, `GemmNumericMode`, `GemmKernel`, `GemmStaging`, `GemmStagingConfig`, `GemmView`, `GemmPlan`) live in `include/alpaka/onHost/algo/internal/gemmTypes.hpp`, so the planner does not depend on the launch machinery. The register-blocked launch path now selects a plan through the planner and dispatches to the compiled family; the simple M2 path, the numerical contract and every kernel arithmetic statement are unchanged.
+
+### Facts
+
+Every fact carries a value, a provenance (`compiled-trait`, `device-property`, `estimate`, `unavailable`) and units. Unknown is an empty value with an explicit reason, never zero or a guessed constant.
+
+| Fact | Source | Status |
+| --- | --- | --- |
+| `simdWidth`, `numPipelines`, `cacheLineBytes`, operation quanta | compiled traits | available |
+| `sharedMemPerBlockBytes`, `maxThreadsPerBlock`, `maxBlocksPerGrid`, `multiProcessorCount`, `warpSize`, `globalMemCapacityBytes` | `DeviceProperties` | available |
+| L1 capacity, L2/last-level capacity | no query in the project | unknown, reason recorded |
+| register budget and compiled resource usage | no query in the project | unknown, reason recorded |
+| active blocks per processor | no query in the project | unknown, reason recorded |
+| native matrix combinations | no capability enumeration | unknown, reason recorded |
+| async-copy capability and alignment | no query in the project | unknown, reason recorded |
+
+The register-pressure model is a planner estimate, not a fact: `(TM*TN + TM + TN + 8) * accumulatorBytes` per worker. It uses `registerBudgetBytes` when a device reports one and the documented `estimatedRegisterBudgetBytes = 2048` otherwise. Both are labelled as estimates in the diagnostics.
+
+### Candidate family and cap
+
+The family is generated from dimensionless multiples of the compiled quanta: per-worker rows `TM` in {1,2,4,8}, per-worker columns `TN = V`, worker columns {1,16} clamped to the block-thread limit, `BK` in {8,16} multiples of the K quantum, and the policy direct or cooperative with stage counts {1,2,3}. The product is at most 64; `maxPlanCandidates = 64` is enforced by the array bound, a runtime guard and a `static_assert`. On a target whose block-thread limit is one, the worker-column axis collapses and the family has 32 distinct entries. The first entry is the minimal direct fallback (`TM=1`, `TN=V`, one worker, `BK=8` quanta), so width-one and tiny shapes always have a legal plan. Runtime problem dimensions never become template arguments.
+
+Pruning checks, in order: structural tile/worker identities and ranges, SIMD pack coverage, K-quantum multiple, documented unrolled-work budget, numerical mode/storage signature, layout and transpose validity, known pointer alignment, block-thread limit, estimated register pressure, cooperative scratch (`stages * (BM*BK + BK*BN) * accumulatorBytes + 64` bytes, the M4 rule), grid-block limit and membership in the compiled family. Every rejection carries a reason.
+
+### Ranking
+
+Survivors are ranked by the section 6.3 models only: useful-work fraction, input arithmetic intensity `2*BM*BN*BK / (BM*BK*sA + BK*BN*sB)`, transfer cost derived from the same panel bytes, and resource pressure from the staging bound and the register estimate. Weights are frozen heuristic constants; ties break on tile M, tile N, K block, stage count, policy and compiled family index. No clock, random engine or filesystem state participates.
+
+### Overrides and defaults
+
+The advanced entry point accepts `std::optional<GemmPlan>` after the staging configuration. An explicit plan runs the same `validatePlan` as an automatic candidate and throws `std::invalid_argument` with the exact reason when it is illegal, outside the compiled family, or inappropriate for the problem. An explicit `GemmStagingConfig` restricts selection to that policy and stage count; the shipped automatic default remains the compile-time `defaultGemmStaging` (direct), so existing behaviour and the explicit cooperative override are preserved. Diagnostics (`PlanDiagnostics`) report the facts used, missing facts, engine, selected plan, tile and thread shape, staging bytes, numerical mode, per-candidate rejection reasons, fallback reason and override use. The planner was validated host-only; heuristic quality (G4) is measured later on hardware, not in this change.
