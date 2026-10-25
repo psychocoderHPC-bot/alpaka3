@@ -9,6 +9,7 @@ checkout. Measured data, figures, and profiler output never get committed.
 from __future__ import annotations
 
 import argparse
+import importlib
 import json
 import sys
 from pathlib import Path
@@ -16,13 +17,14 @@ from pathlib import Path
 import matplotlib
 
 matplotlib.use("Agg")
-import matplotlib.pyplot as plt  # noqa: E402
+plt = importlib.import_module("matplotlib.pyplot")
 
 
 CHECKOUT_ROOT = Path(__file__).resolve().parents[2]
 
 
 def load_samples(path: Path) -> dict:
+    """Load and validate one samples.json document."""
     with path.open("r", encoding="utf-8") as stream:
         document = json.load(stream)
     if document.get("kind") != "alpaka3-gemm-samples":
@@ -31,25 +33,28 @@ def load_samples(path: Path) -> dict:
 
 
 def transpose_code(record: dict) -> str:
+    """Return the two-letter transpose code for a record."""
+
     def code(operation: str) -> str:
+        """Translate one transpose flag to a single letter."""
         return "t" if operation == "transpose" else "n"
 
     return code(record["transpose_a"]) + code(record["transpose_b"])
 
 
 def label(record: dict) -> str:
+    """Build the plot label for one sample record."""
     dims = f"{record['m']}x{record['n']}x{record['k']}"
-    return (
-        f"{record['case_id']} {dims} {record['mode']} "
-        f"{transpose_code(record)} {record['stride_class']}"
-    )
+    return f"{record['case_id']} {dims} {record['mode']} {transpose_code(record)} {record['stride_class']}"
 
 
 def ok_records(document: dict) -> list[dict]:
+    """Return only the successfully timed records of a document."""
     return [record for record in document.get("records", []) if record.get("status") == "ok"]
 
 
 def ensure_outside_checkout(out_dir: Path, allow_inside: bool) -> None:
+    """Refuse to write figures into the source checkout unless allowed."""
     resolved = out_dir.resolve()
     if not allow_inside and (resolved == CHECKOUT_ROOT or CHECKOUT_ROOT in resolved.parents):
         raise SystemExit(
@@ -59,6 +64,7 @@ def ensure_outside_checkout(out_dir: Path, allow_inside: bool) -> None:
 
 
 def plot_throughput(document: dict, source: Path, out_dir: Path, index: int) -> Path | None:
+    """Write the throughput bar chart for one samples document."""
     records = ok_records(document)
     if not records:
         print(f"{source}: no timed records; skipping throughput plot", file=sys.stderr)
@@ -79,26 +85,31 @@ def plot_throughput(document: dict, source: Path, out_dir: Path, index: int) -> 
     return target
 
 
-def plot_ratio(candidate: dict, baseline: dict, out_dir: Path) -> Path | None:
-    baseline_by_key = {
-        record["key"]: record for record in ok_records(baseline) if "key" in record
-    }
+def ratio_entry(record: dict, reference: dict) -> tuple[str, float, float, float]:
+    """Return label, throughput ratio and ratio error bounds for a record."""
+    ratio = record["gflops"] / reference["gflops"]
+    flops = 2.0 * record["m"] * record["n"] * record["k"]
+    record_min = flops / record["max_ns"]
+    record_max = flops / record["min_ns"]
+    reference_min = flops / reference["max_ns"]
+    reference_max = flops / reference["min_ns"]
+    return label(record), ratio, record_min / reference_max, record_max / reference_min
+
+
+def matched_ratios(candidate: dict, baseline: dict) -> list[tuple[str, float, float, float]]:
+    """Pair candidate records with baseline records by key."""
+    baseline_by_key = {record["key"]: record for record in ok_records(baseline) if "key" in record}
     ratios: list[tuple[str, float, float, float]] = []
     for record in ok_records(candidate):
-        key = record.get("key")
-        reference = baseline_by_key.get(key)
+        reference = baseline_by_key.get(record.get("key"))
         if reference is None or not reference.get("gflops"):
             continue
-        ratio = record["gflops"] / reference["gflops"]
-        flops = 2.0 * record["m"] * record["n"] * record["k"]
-        record_min = flops / record["max_ns"]
-        record_max = flops / record["min_ns"]
-        reference_min = flops / reference["max_ns"]
-        reference_max = flops / reference["min_ns"]
-        ratios.append((label(record), ratio, record_min / reference_max, record_max / reference_min))
-    if not ratios:
-        print("no matching timed records between candidate and baseline", file=sys.stderr)
-        return None
+        ratios.append(ratio_entry(record, reference))
+    return ratios
+
+
+def draw_ratio(ratios: list[tuple[str, float, float, float]], out_dir: Path) -> Path:
+    """Render the ratio chart for the given ratios and return its path."""
     ratios.sort(key=lambda item: item[1])
     labels = [item[0] for item in ratios]
     values = [item[1] for item in ratios]
@@ -118,7 +129,17 @@ def plot_ratio(candidate: dict, baseline: dict, out_dir: Path) -> Path | None:
     return target
 
 
+def plot_ratio(candidate: dict, baseline: dict, out_dir: Path) -> Path | None:
+    """Write the ratio chart if candidate and baseline records match."""
+    ratios = matched_ratios(candidate, baseline)
+    if not ratios:
+        print("no matching timed records between candidate and baseline", file=sys.stderr)
+        return None
+    return draw_ratio(ratios, out_dir)
+
+
 def main(argv: list[str] | None = None) -> int:
+    """Parse arguments, render all requested plots and report the paths."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("samples", nargs="+", type=Path, help="samples.json files")
     parser.add_argument(

@@ -15,8 +15,7 @@ target_include_directories(gemm_bench PRIVATE "src")
 get_filename_component(GEMM_CHECKOUT_ROOT "${CMAKE_CURRENT_LIST_DIR}/../.." ABSOLUTE)
 target_compile_definitions(
     gemm_bench
-    PRIVATE GEMM_DEFAULT_MANIFEST="${CMAKE_CURRENT_LIST_DIR}/workloads.json"
-            GEMM_SOURCE_DIR="${GEMM_CHECKOUT_ROOT}"
+    PRIVATE GEMM_DEFAULT_MANIFEST="${CMAKE_CURRENT_LIST_DIR}/workloads.json" GEMM_SOURCE_DIR="${GEMM_CHECKOUT_ROOT}"
 )
 
 option(GEMM_BENCH_WERROR "Treat warnings in the GEMM benchmark harness as errors." OFF)

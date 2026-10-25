@@ -101,35 +101,45 @@ REJECTED_VERDICTS = {"fail", "failed", "reject", "rejected"}
 
 
 class Findings:
+    """Collect blocking findings from the acceptance checks."""
+
     def __init__(self) -> None:
+        """Create an empty finding list."""
         self.items: list[dict[str, str]] = []
 
     def add(self, category: str, message: str) -> None:
+        """Append one finding with its category and message."""
         self.items.append({"category": category, "message": message})
 
     def __bool__(self) -> bool:
+        """Return whether any finding was collected."""
         return bool(self.items)
 
     def extend(self, other: "Findings") -> None:
+        """Append every finding of another instance."""
         self.items.extend(other.items)
 
 
 def normalize_sha(value: Any) -> str:
+    """Normalize an optional SHA value for comparison."""
     if not isinstance(value, str):
         return ""
     return value.strip().lower()
 
 
 def sha_matches(candidate: Any, head: str) -> bool:
+    """Return whether a candidate SHA equals the normalized head SHA."""
     return bool(head) and normalize_sha(candidate) == head
 
 
 def load_yaml(path: Path) -> Any:
+    """Load a YAML document from disk."""
     with path.open("r", encoding="utf-8") as stream:
         return yaml.safe_load(stream)
 
 
 def requirement_list(document: Any) -> list[dict[str, Any]]:
+    """Return the requirement mappings of a YAML document."""
     if isinstance(document, list):
         return [item for item in document if isinstance(item, dict)]
     if not isinstance(document, dict):
@@ -143,16 +153,19 @@ def requirement_list(document: Any) -> list[dict[str, Any]]:
 
 
 def is_required(requirement: dict[str, Any]) -> bool:
+    """Return whether a requirement is blocking."""
     if requirement.get("required") is False:
         return False
     return requirement.get("status") not in {"not_required", "informational"}
 
 
 def as_list(value: Any) -> list[Any]:
+    """Return the value as a list, or an empty list for non-lists."""
     return value if isinstance(value, list) else []
 
 
 def approved_skip(entry: dict[str, Any], target: str, mode: str | None) -> bool:
+    """Return whether an approved skip covers the target and mode."""
     for skip in as_list(entry.get("skips")):
         if not isinstance(skip, dict):
             continue
@@ -166,6 +179,7 @@ def approved_skip(entry: dict[str, Any], target: str, mode: str | None) -> bool:
 
 
 def collect_samples(run_root: Path, entry: dict[str, Any]) -> tuple[list[dict[str, Any]], Findings]:
+    """Load all sample records declared for an acceptance entry."""
     findings = Findings()
     sample_files: list[Path] = []
     declared = as_list(entry.get("sample_files"))
@@ -205,15 +219,57 @@ def collect_samples(run_root: Path, entry: dict[str, Any]) -> tuple[list[dict[st
 
 
 def sample_status(record: dict[str, Any]) -> str:
+    """Return the lower-case status of a sample record."""
     return str(record.get("status", "")).lower()
 
 
 def matches_requirement(record: dict[str, Any], requirement_id: str) -> bool:
+    """Return whether a sample record belongs to the requirement."""
     for key in ("requirement_id", "_file_requirement_id"):
         value = record.get(key)
         if value is not None and value != requirement_id:
             return False
     return True
+
+
+def record_selected(
+    record: dict[str, Any],
+    requirement_id: str,
+    target: str,
+    mode: str | None,
+    case_ids: set[str],
+) -> bool:
+    """Return whether a sample record matches the requirement and selection."""
+    if not matches_requirement(record, requirement_id):
+        return False
+    if str(record.get("target", "")) != target:
+        return False
+    if mode is not None and str(record.get("mode", "")) != mode:
+        return False
+    if case_ids and str(record.get("case_id", "")) not in case_ids:
+        return False
+    return True
+
+
+def split_samples(
+    samples: list[dict[str, Any]],
+    requirement_id: str,
+    target: str,
+    mode: str | None,
+    case_ids: set[str],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Partition selected samples into passing and skipped records."""
+    passing: list[dict[str, Any]] = []
+    skipped: list[dict[str, Any]] = []
+    for record in samples:
+        if not record_selected(record, requirement_id, target, mode, case_ids):
+            continue
+        status = sample_status(record)
+        if status in PASSING_STATUSES:
+            passing.append(record)
+        elif status in SKIPPED_STATUSES:
+            skipped.append(record)
+    return passing, skipped
 
 
 def check_coverage(
@@ -222,9 +278,10 @@ def check_coverage(
     samples: list[dict[str, Any]],
     findings: Findings,
 ) -> None:
+    """Check that every required target and mode has a passing sample."""
     requirement_id = str(requirement.get("id", "<unnamed>"))
     targets = [str(item) for item in as_list(requirement.get("required_targets"))]
-    modes = [str(item) for item in as_list(requirement.get("modes"))]
+    modes: list[str | None] = [str(item) for item in as_list(requirement.get("modes"))]
     case_ids = {str(item) for item in as_list(requirement.get("case_ids"))}
 
     if not targets:
@@ -234,26 +291,11 @@ def check_coverage(
         )
         return
     if not modes:
-        modes = [None]  # type: ignore[list-item]
+        modes = [None]
 
     for target in targets:
         for mode in modes:
-            passing = []
-            skipped = []
-            for record in samples:
-                if not matches_requirement(record, requirement_id):
-                    continue
-                if str(record.get("target", "")) != target:
-                    continue
-                if mode is not None and str(record.get("mode", "")) != mode:
-                    continue
-                if case_ids and str(record.get("case_id", "")) not in case_ids:
-                    continue
-                status = sample_status(record)
-                if status in PASSING_STATUSES:
-                    passing.append(record)
-                elif status in SKIPPED_STATUSES:
-                    skipped.append(record)
+            passing, skipped = split_samples(samples, requirement_id, target, mode, case_ids)
             label = f"{requirement_id}: target {target}" + (f", mode {mode}" if mode else "")
             if passing:
                 continue
@@ -271,6 +313,7 @@ def check_substitutions(
     global_substitutions: list[Any],
     findings: Findings,
 ) -> None:
+    """Check that every declared substitution is approved and allowed."""
     requirement_id = str(requirement.get("id", "<unnamed>"))
     allowed_raw = requirement.get("allowed_substitutions", [])
     allowed = set()
@@ -307,6 +350,7 @@ def check_review(
     entry: dict[str, Any],
     findings: Findings,
 ) -> None:
+    """Check reviewer verdicts and unresolved required findings."""
     requirement_id = str(requirement.get("id", "<unnamed>"))
     reviews = [requirement.get("review"), entry.get("review")]
     for review in reviews:
@@ -335,6 +379,7 @@ def check_review(
 
 
 def compare_threshold(op: str, actual: float, expected: float) -> bool:
+    """Evaluate one numeric comparison operator."""
     if op == ">=":
         return actual >= expected
     if op == ">":
@@ -353,6 +398,7 @@ def check_thresholds(
     entry: dict[str, Any],
     findings: Findings,
 ) -> None:
+    """Check every declared numeric threshold of a requirement."""
     requirement_id = str(requirement.get("id", "<unnamed>"))
     metrics = entry.get("metrics", {})
     if not isinstance(metrics, dict):
@@ -366,7 +412,7 @@ def check_thresholds(
             continue
         metric = str(threshold.get("metric", ""))
         op = str(threshold.get("op", ">="))
-        expected = threshold.get("value")
+        expected: Any = threshold.get("value")
         actual: Any = metrics.get(metric)
         target = threshold.get("target")
         if target is not None and isinstance(actual, dict):
@@ -392,7 +438,8 @@ def check_thresholds(
             )
 
 
-def main(argv: list[str] | None = None) -> int:
+def parse_arguments(argv: list[str] | None) -> argparse.Namespace:
+    """Parse the command line arguments."""
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--requirements", required=True, type=Path)
     parser.add_argument("--run-root", required=True, type=Path)
@@ -400,36 +447,38 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--acceptance", type=Path, default=None, help="override acceptance.json path")
     parser.add_argument("--json-report", type=Path, default=None)
     parser.add_argument("--allow-run-root-inside-repo", action="store_true")
-    args = parser.parse_args(argv)
+    return parser.parse_args(argv)
 
-    findings = Findings()
 
+def resolve_run_root(args: argparse.Namespace) -> Path | None:
+    """Validate and resolve the external evidence run root."""
     run_root = args.run_root.resolve()
     if not run_root.is_dir():
         print(f"check_acceptance: run root does not exist: {run_root}", file=sys.stderr)
-        return 2
-    if not args.allow_run_root_inside_repo and (
-        run_root == CHECKOUT_ROOT or CHECKOUT_ROOT in run_root.parents
-    ):
+        return None
+    if not args.allow_run_root_inside_repo and (run_root == CHECKOUT_ROOT or CHECKOUT_ROOT in run_root.parents):
         print(
             f"check_acceptance: refusing to read evidence from inside the checkout ({CHECKOUT_ROOT}); "
             "pass --allow-run-root-inside-repo only for local debugging",
             file=sys.stderr,
         )
-        return 2
+        return None
+    return run_root
 
-    if not args.requirements.is_file():
-        print(f"check_acceptance: requirements file does not exist: {args.requirements}", file=sys.stderr)
-        return 2
 
-    document = load_yaml(args.requirements)
-    requirements = requirement_list(document)
-    head_sha = normalize_sha(args.head_sha or (document.get("head_sha") if isinstance(document, dict) else None))
+def resolve_head_sha(args: argparse.Namespace, document: Any, findings: Findings) -> str:
+    """Determine the head SHA and record format findings."""
+    document_sha = document.get("head_sha") if isinstance(document, dict) else None
+    head_sha = normalize_sha(args.head_sha or document_sha)
     if not head_sha:
         findings.add("missing-head-sha", "no head SHA given on the command line or in the requirements YAML")
     if head_sha and len(head_sha) < 7:
         findings.add("invalid-head-sha", f"head SHA {head_sha!r} is too short")
+    return head_sha
 
+
+def apply_defaults(document: Any, requirements: list[dict[str, Any]]) -> None:
+    """Fill missing per-requirement defaults from the document."""
     default_targets = as_list(document.get("required_targets")) if isinstance(document, dict) else []
     default_substitutions = as_list(document.get("allowed_substitutions")) if isinstance(document, dict) else []
     for requirement in requirements:
@@ -438,26 +487,26 @@ def main(argv: list[str] | None = None) -> int:
         if "allowed_substitutions" not in requirement and default_substitutions:
             requirement["allowed_substitutions"] = default_substitutions
 
-    acceptance_path = args.acceptance or (run_root / "acceptance.json")
+
+def load_acceptance(path: Path, findings: Findings) -> dict[str, Any]:
+    """Load acceptance.json, recording a finding on failure."""
     acceptance: dict[str, Any] = {}
-    if not acceptance_path.is_file():
-        findings.add("missing-acceptance", f"acceptance file does not exist: {acceptance_path}")
-    else:
-        try:
-            loaded = json.loads(acceptance_path.read_text(encoding="utf-8"))
-            if isinstance(loaded, dict):
-                acceptance = loaded
-            else:
-                findings.add("invalid-acceptance", f"{acceptance_path}: top level is not an object")
-        except (OSError, json.JSONDecodeError) as error:
-            findings.add("invalid-acceptance", f"{acceptance_path}: {error}")
+    if not path.is_file():
+        findings.add("missing-acceptance", f"acceptance file does not exist: {path}")
+        return acceptance
+    try:
+        loaded = json.loads(path.read_text(encoding="utf-8"))
+        if isinstance(loaded, dict):
+            acceptance = loaded
+        else:
+            findings.add("invalid-acceptance", f"{path}: top level is not an object")
+    except (OSError, json.JSONDecodeError) as error:
+        findings.add("invalid-acceptance", f"{path}: {error}")
+    return acceptance
 
-    if acceptance and head_sha and not sha_matches(acceptance.get("source_sha"), head_sha):
-        findings.add(
-            "stale-acceptance-sha",
-            f"acceptance source_sha {acceptance.get('source_sha')!r} does not match head {head_sha}",
-        )
 
+def collect_entries(acceptance: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    """Index acceptance entries by requirement id."""
     entries_raw = acceptance.get("entries", {})
     entries: dict[str, dict[str, Any]] = {}
     if isinstance(entries_raw, list):
@@ -466,67 +515,95 @@ def main(argv: list[str] | None = None) -> int:
                 entries[str(entry["id"])] = entry
     elif isinstance(entries_raw, dict):
         entries = {str(key): value for key, value in entries_raw.items() if isinstance(value, dict)}
+    return entries
 
-    global_substitutions: list[Any] = []
-    if acceptance:
-        global_substitutions = as_list(acceptance.get("substitutions"))
-    for requirement in requirements:
-        requirement_id = str(requirement.get("id", ""))
-        if not requirement_id:
-            findings.add("invalid-requirement", "requirement without an id")
-            continue
-        if not is_required(requirement):
-            continue
 
-        entry = entries.get(requirement_id)
-        if entry is None:
-            findings.add("missing-entry", f"{requirement_id}: no acceptance entry")
-            continue
+def check_entry_status(requirement_id: str, entry: dict[str, Any], findings: Findings) -> None:
+    """Check the entry status and its skip approvals."""
+    status = str(entry.get("status", "")).lower()
+    if status in SKIPPED_STATUSES:
+        if entry.get("approved") is not True:
+            findings.add("unapproved-skip", f"{requirement_id}: requirement entry is skipped without approval")
+    elif status not in PASSING_STATUSES:
+        findings.add(
+            "not-passing",
+            f"{requirement_id}: acceptance status is {status or '<missing>'}, expected a passing status",
+        )
 
-        if head_sha and entry.get("source_sha") is not None and not sha_matches(entry.get("source_sha"), head_sha):
+    for skip in as_list(entry.get("skips")):
+        if isinstance(skip, dict) and skip.get("approved") is not True:
             findings.add(
-                "stale-entry-sha",
-                f"{requirement_id}: entry source_sha {entry.get('source_sha')!r} does not match head {head_sha}",
+                "unapproved-skip",
+                f"{requirement_id}: skip for target {skip.get('target')!r} is not approved",
             )
 
-        status = str(entry.get("status", "")).lower()
-        if status in SKIPPED_STATUSES:
-            if entry.get("approved") is not True:
-                findings.add("unapproved-skip", f"{requirement_id}: requirement entry is skipped without approval")
-        elif status not in PASSING_STATUSES:
+
+def check_sample_shas(
+    requirement_id: str,
+    samples: list[dict[str, Any]],
+    head_sha: str,
+    findings: Findings,
+) -> None:
+    """Check that every sample carries the head SHA."""
+    for record in samples:
+        record_sha = record.get("source_sha")
+        if record_sha is None:
             findings.add(
-                "not-passing",
-                f"{requirement_id}: acceptance status is {status or '<missing>'}, expected a passing status",
+                "missing-sample-sha",
+                f"{requirement_id}: sample in {record.get('_file')} has no source SHA",
+            )
+        elif head_sha and not sha_matches(record_sha, head_sha):
+            findings.add(
+                "stale-sample-sha",
+                f"{requirement_id}: sample in {record.get('_file')} has stale SHA {record_sha!r}",
             )
 
-        for skip in as_list(entry.get("skips")):
-            if isinstance(skip, dict) and skip.get("approved") is not True:
-                findings.add(
-                    "unapproved-skip",
-                    f"{requirement_id}: skip for target {skip.get('target')!r} is not approved",
-                )
 
-        check_substitutions(requirement, entry, global_substitutions, findings)
-        check_review(requirement, entry, findings)
-        check_thresholds(requirement, entry, findings)
+def check_requirement(
+    requirement: dict[str, Any],
+    acceptance: dict[str, Any],
+    run_root: Path,
+    head_sha: str,
+    findings: Findings,
+) -> None:
+    """Run every acceptance check for one required requirement."""
+    requirement_id = str(requirement.get("id", ""))
+    if not requirement_id:
+        findings.add("invalid-requirement", "requirement without an id")
+        return
+    if not is_required(requirement):
+        return
 
-        samples, sample_findings = collect_samples(run_root, entry)
-        findings.extend(sample_findings)
-        for record in samples:
-            record_sha = record.get("source_sha")
-            if record_sha is None:
-                findings.add(
-                    "missing-sample-sha",
-                    f"{requirement_id}: sample in {record.get('_file')} has no source SHA",
-                )
-            elif head_sha and not sha_matches(record_sha, head_sha):
-                findings.add(
-                    "stale-sample-sha",
-                    f"{requirement_id}: sample in {record.get('_file')} has stale SHA {record_sha!r}",
-                )
-        check_coverage(requirement, entry, samples, findings)
+    entry = collect_entries(acceptance).get(requirement_id)
+    if entry is None:
+        findings.add("missing-entry", f"{requirement_id}: no acceptance entry")
+        return
 
-    report = {
+    if head_sha and entry.get("source_sha") is not None and not sha_matches(entry.get("source_sha"), head_sha):
+        findings.add(
+            "stale-entry-sha",
+            f"{requirement_id}: entry source_sha {entry.get('source_sha')!r} does not match head {head_sha}",
+        )
+
+    check_entry_status(requirement_id, entry, findings)
+    check_substitutions(requirement, entry, as_list(acceptance.get("substitutions")), findings)
+    check_review(requirement, entry, findings)
+    check_thresholds(requirement, entry, findings)
+
+    samples, sample_findings = collect_samples(run_root, entry)
+    findings.extend(sample_findings)
+    check_sample_shas(requirement_id, samples, head_sha, findings)
+    check_coverage(requirement, entry, samples, findings)
+
+
+def build_report(
+    head_sha: str,
+    run_root: Path,
+    requirements: list[dict[str, Any]],
+    findings: Findings,
+) -> dict[str, Any]:
+    """Assemble the JSON-serializable acceptance report."""
+    return {
         "schema_version": 1,
         "head_sha": head_sha,
         "run_root": str(run_root),
@@ -534,6 +611,10 @@ def main(argv: list[str] | None = None) -> int:
         "passed": not findings,
         "findings": findings.items,
     }
+
+
+def emit_report(report: dict[str, Any], args: argparse.Namespace, findings: Findings) -> int:
+    """Write the optional JSON report and print the final verdict."""
     if args.json_report is not None:
         args.json_report.parent.mkdir(parents=True, exist_ok=True)
         args.json_report.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
@@ -543,8 +624,41 @@ def main(argv: list[str] | None = None) -> int:
         for finding in findings.items:
             print(f"  [{finding['category']}] {finding['message']}", file=sys.stderr)
         return 1
-    print(f"acceptance PASSED for head {head_sha} ({len(requirements)} requirement(s))")
+    print(f"acceptance PASSED for head {report['head_sha']} ({report['requirements']} requirement(s))")
     return 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    """Run the acceptance gate and return its exit status."""
+    args = parse_arguments(argv)
+    findings = Findings()
+
+    run_root = resolve_run_root(args)
+    if run_root is None:
+        return 2
+
+    if not args.requirements.is_file():
+        print(f"check_acceptance: requirements file does not exist: {args.requirements}", file=sys.stderr)
+        return 2
+
+    document = load_yaml(args.requirements)
+    requirements = requirement_list(document)
+    head_sha = resolve_head_sha(args, document, findings)
+    apply_defaults(document, requirements)
+
+    acceptance_path = args.acceptance or (run_root / "acceptance.json")
+    acceptance = load_acceptance(acceptance_path, findings)
+    if acceptance and head_sha and not sha_matches(acceptance.get("source_sha"), head_sha):
+        findings.add(
+            "stale-acceptance-sha",
+            f"acceptance source_sha {acceptance.get('source_sha')!r} does not match head {head_sha}",
+        )
+
+    for requirement in requirements:
+        check_requirement(requirement, acceptance, run_root, head_sha, findings)
+
+    report = build_report(head_sha, run_root, requirements, findings)
+    return emit_report(report, args, findings)
 
 
 if __name__ == "__main__":

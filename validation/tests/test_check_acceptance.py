@@ -7,23 +7,24 @@ temporary directory. No fixture reads evidence from the checkout.
 
 from __future__ import annotations
 
+import importlib
 import json
 import sys
 from pathlib import Path
 
-import pytest
 import yaml
 
 VALIDATION_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(VALIDATION_DIR))
 
-import check_acceptance  # noqa: E402
+check_acceptance = importlib.import_module("check_acceptance")
 
 HEAD = "0123456789abcdef0123456789abcdef01234567"
 STALE = "fedcba9876543210fedcba9876543210fedcba98"
 
 
 def base_requirements(**overrides):
+    """Return a minimal requirements document for one requirement."""
     requirement = {
         "id": "G1-boundaries",
         "required": True,
@@ -42,6 +43,7 @@ def base_requirements(**overrides):
 
 
 def base_acceptance(**entry_overrides):
+    """Return a minimal passing acceptance document."""
     entry = {
         "status": "pass",
         "source_sha": HEAD,
@@ -59,6 +61,7 @@ def base_acceptance(**entry_overrides):
 
 
 def base_samples(**record_overrides):
+    """Return a minimal passing samples document."""
     record = {
         "target": "cpu-host",
         "mode": "fp32",
@@ -77,13 +80,12 @@ def base_samples(**record_overrides):
 
 
 def run_checker(tmp_path, requirements, acceptance, samples, head=HEAD):
+    """Write fixtures and run the acceptance checker."""
     run_root = tmp_path / "evidence"
     (run_root / "cpu-host" / "fp32").mkdir(parents=True, exist_ok=True)
     (run_root / "acceptance.json").write_text(json.dumps(acceptance), encoding="utf-8")
     if samples is not None:
-        (run_root / "cpu-host" / "fp32" / "samples.json").write_text(
-            json.dumps(samples), encoding="utf-8"
-        )
+        (run_root / "cpu-host" / "fp32" / "samples.json").write_text(json.dumps(samples), encoding="utf-8")
     requirements_path = tmp_path / "requirements.yaml"
     requirements_path.write_text(yaml.safe_dump(requirements), encoding="utf-8")
     return check_acceptance.main(
@@ -99,6 +101,7 @@ def run_checker(tmp_path, requirements, acceptance, samples, head=HEAD):
 
 
 def categories(capsys):
+    """Return the finding categories printed to stderr."""
     captured = capsys.readouterr()
     text = captured.err
     found = set()
@@ -119,11 +122,13 @@ def categories(capsys):
 
 
 def test_passing_evidence_succeeds(tmp_path, capsys):
+    """Passing evidence must be accepted."""
     assert run_checker(tmp_path, base_requirements(), base_acceptance(), base_samples()) == 0
     assert "acceptance PASSED" in capsys.readouterr().out
 
 
 def test_missing_required_entry_fails(tmp_path, capsys):
+    """A missing required entry must fail."""
     acceptance = base_acceptance()
     acceptance["entries"] = {}
     assert run_checker(tmp_path, base_requirements(), acceptance, base_samples()) == 1
@@ -131,6 +136,7 @@ def test_missing_required_entry_fails(tmp_path, capsys):
 
 
 def test_stale_acceptance_sha_fails(tmp_path, capsys):
+    """A stale acceptance SHA must fail."""
     acceptance = base_acceptance()
     acceptance["source_sha"] = STALE
     assert run_checker(tmp_path, base_requirements(), acceptance, base_samples()) == 1
@@ -138,6 +144,7 @@ def test_stale_acceptance_sha_fails(tmp_path, capsys):
 
 
 def test_stale_sample_sha_fails(tmp_path, capsys):
+    """A stale sample SHA must fail."""
     samples = base_samples()
     samples["revision"] = STALE
     assert run_checker(tmp_path, base_requirements(), base_acceptance(), samples) == 1
@@ -145,14 +152,14 @@ def test_stale_sample_sha_fails(tmp_path, capsys):
 
 
 def test_unsupported_substitution_fails(tmp_path, capsys):
-    acceptance = base_acceptance(
-        substitutions=[{"from": "fp64", "to": "cpu-fallback", "approved": True}]
-    )
+    """An unlisted substitution must fail."""
+    acceptance = base_acceptance(substitutions=[{"from": "fp64", "to": "cpu-fallback", "approved": True}])
     assert run_checker(tmp_path, base_requirements(), acceptance, base_samples()) == 1
     assert "unsupported-substitution" in categories(capsys)
 
 
 def test_unresolved_required_review_finding_fails(tmp_path, capsys):
+    """An unresolved required finding must fail."""
     acceptance = base_acceptance(
         review={
             "verdict": "pass",
@@ -164,20 +171,21 @@ def test_unresolved_required_review_finding_fails(tmp_path, capsys):
 
 
 def test_failing_threshold_fails(tmp_path, capsys):
+    """A failing numeric threshold must fail."""
     acceptance = base_acceptance(metrics={"gflops_ratio": 0.50})
     assert run_checker(tmp_path, base_requirements(), acceptance, base_samples()) == 1
     assert "failing-threshold" in categories(capsys)
 
 
 def test_unapproved_skip_fails(tmp_path, capsys):
-    acceptance = base_acceptance(
-        skips=[{"target": "cpu-host", "mode": "fp32", "reason": "slow", "approved": False}]
-    )
+    """An unapproved skip must fail."""
+    acceptance = base_acceptance(skips=[{"target": "cpu-host", "mode": "fp32", "reason": "slow", "approved": False}])
     assert run_checker(tmp_path, base_requirements(), acceptance, base_samples()) == 1
     assert "unapproved-skip" in categories(capsys)
 
 
 def test_missing_passing_sample_fails(tmp_path, capsys):
+    """A missing passing sample must fail."""
     samples = base_samples(status="skipped")
     assert run_checker(tmp_path, base_requirements(), base_acceptance(), samples) == 1
     found = categories(capsys)
@@ -185,6 +193,7 @@ def test_missing_passing_sample_fails(tmp_path, capsys):
 
 
 def test_empty_required_targets_fails(tmp_path, capsys):
+    """An empty required target set must fail."""
     requirements = base_requirements(required_targets=[])
     assert run_checker(tmp_path, requirements, base_acceptance(), base_samples()) == 1
     assert "empty-required-targets" in categories(capsys)
