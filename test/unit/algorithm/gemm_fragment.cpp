@@ -13,9 +13,10 @@
 #include <chrono>
 #include <cmath>
 #include <cstdint>
-#include <cstdio>
+#include <iostream>
 #include <numeric>
 #include <set>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -382,8 +383,10 @@ TEMPLATE_LIST_TEST_CASE(
             {512u, 512u, 512u},
             {1024u, 1024u, 512u}};
 
-        std::printf("[fragment benchmark] plan TM=%u TN=%u BK=%u threads=%u\n", tm, tn, bk, threads);
-        std::printf("%-18s %12s %12s %10s\n", "shape", "register[ms]", "manual[ms]", "ratio");
+        std::ostringstream report;
+        report << "[fragment benchmark] plan TM=" << tm << " TN=" << tn << " BK=" << bk << " threads=" << threads
+               << "\n"
+               << "shape              register[ms]   manual[ms]      ratio\n";
 
         for(auto const& shape : shapes)
         {
@@ -511,18 +514,13 @@ TEMPLATE_LIST_TEST_CASE(
             double const rMedian = median(registerTimes);
             double const mMedian = median(manualTimes);
             double const ratio = mMedian / rMedian;
-            std::printf(
-                "%-18s %12.4f %12.4f %10.3f\n",
-                (std::to_string(m) + "x" + std::to_string(n) + "x" + std::to_string(k)).c_str(),
-                rMedian,
-                mMedian,
-                ratio);
-            std::printf(
-                "  spread: register %.4f ms, manual %.4f ms, throughput %.3f TFLOP/s (2*M*N*K)\n",
-                spread(registerTimes),
-                spread(manualTimes),
-                2.0 * static_cast<double>(m) * n * k / (rMedian * 1.0e9));
+            report << (std::to_string(m) + "x" + std::to_string(n) + "x" + std::to_string(k)) << "  " << rMedian
+                   << "  " << mMedian << "  " << ratio << "\n"
+                   << "  spread: register " << spread(registerTimes) << " ms, manual " << spread(manualTimes)
+                   << " ms, throughput " << 2.0 * static_cast<double>(m) * n * k / (rMedian * 1.0e9)
+                   << " TFLOP/s (2*M*N*K)\n";
             CHECK(ratio >= 0.95);
         }
+        std::cout << report.str();
     }
 }
