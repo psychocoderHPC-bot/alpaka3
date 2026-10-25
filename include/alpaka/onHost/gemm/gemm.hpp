@@ -7,6 +7,7 @@
 #include "alpaka/KernelBundle.hpp"
 #include "alpaka/Vec.hpp"
 #include "alpaka/api/trait.hpp"
+#include "alpaka/core/Float16.hpp"
 #include "alpaka/core/common.hpp"
 #include "alpaka/onAcc/gemm/gemm.hpp"
 #include "alpaka/onHost/Queue.hpp"
@@ -65,9 +66,11 @@ namespace alpaka::onHost
 
     /** Numerical mode of the GEMM operation.
      *
-     * fp16ToFp32 and bf16ToFp32 are the extension point for the FP16/BF16 storage types: the mode names and the
-     * validation path exist, but this build does not own a 16-bit storage type and therefore rejects those modes
-     * before launch instead of silently computing in FP32.
+     * fp16ToFp32 requires @ref alpaka::Float16 storage for A and B and FP32 storage for C. bf16ToFp32 is the same
+     * with @ref alpaka::BFloat16. In both modes the stored inputs are converted exactly to FP32 inside the common
+     * kernel, the products and the accumulation are FP32, and the result is stored as FP32. The mode and the view
+     * value types must agree: a mismatch, including passing already-converted FP32 operands with a mixed mode tag,
+     * is rejected before launch. The two 16-bit storage types are never interchangeable.
      */
     enum class GemmNumericMode : std::uint8_t
     {
@@ -613,36 +616,42 @@ namespace alpaka::onHost
         static_assert(std::is_arithmetic_v<std::remove_cv_t<T_Alpha>>, "alpha must be an arithmetic scalar");
         static_assert(std::is_arithmetic_v<std::remove_cv_t<T_Beta>>, "beta must be an arithmetic scalar");
 
-        auto const execute = [&]<typename T_Acc>()
+        // The accumulator type is also the type the kernel uses to read alpha, beta and the old C value, so a
+        // mismatch here would silently change the arithmetic rather than fail. Check the complete mode signature
+        // before anything is enqueued and name the required storage in the error.
+        auto const execute = [&]<typename T_Acc, typename T_AStorage, typename T_BStorage>(char const* requirement)
         {
-            using ValueType = std::remove_cv_t<T_Acc>;
+            using CType = std::remove_cv_t<T_C>;
+            using AType = std::remove_cv_t<T_A>;
+            using BType = std::remove_cv_t<T_B>;
             if constexpr(
-                std::same_as<std::remove_cv_t<T_C>, ValueType> && std::same_as<std::remove_cv_t<T_A>, ValueType>
-                && std::same_as<std::remove_cv_t<T_B>, ValueType>)
+                std::same_as<CType, T_Acc> && std::same_as<AType, T_AStorage> && std::same_as<BType, T_BStorage>)
             {
-                gemmInternal::executeGemm<ValueType>(queue, exec, c, a, b, alpha, beta);
+                gemmInternal::executeGemm<T_Acc>(queue, exec, c, a, b, alpha, beta);
             }
             else
             {
                 throw std::invalid_argument(
-                    "GEMM: the requested numerical mode does not match the value types of the views");
+                    std::string{"GEMM: numerical mode does not match the view value types; "} + requirement);
             }
         };
 
         switch(mode)
         {
         case GemmNumericMode::fp32:
-            execute.template operator()<float>();
+            execute.template operator()<float, float, float>("fp32 requires float storage for C, A and B");
             break;
         case GemmNumericMode::fp64:
-            execute.template operator()<double>();
+            execute.template operator()<double, double, double>("fp64 requires double storage for C, A and B");
             break;
         case GemmNumericMode::fp16ToFp32:
-            throw std::invalid_argument(
-                "GEMM: fp16->fp32 mode needs the FP16 storage type, which is not part of this build");
+            execute.template operator()<float, Float16, Float16>(
+                "fp16ToFp32 requires float C and Float16 A/B storage");
+            break;
         case GemmNumericMode::bf16ToFp32:
-            throw std::invalid_argument(
-                "GEMM: bf16->fp32 mode needs the BF16 storage type, which is not part of this build");
+            execute.template operator()<float, BFloat16, BFloat16>(
+                "bf16ToFp32 requires float C and BFloat16 A/B storage");
+            break;
         }
     }
 
