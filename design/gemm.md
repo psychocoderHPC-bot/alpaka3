@@ -506,3 +506,44 @@ Still required: profiler evidence that a real asynchronous copy overlaps transfe
 ## 21 Toolchain compatibility
 
 icpx 2026.2 marks `sycl::nd_item::barrier()` deprecated. The block barrier in `include/alpaka/api/syclGeneric/onAcc.hpp` now calls `sycl::group_barrier(item.get_group())`, the SYCL 2020 replacement. Both forms issue the same work-group control barrier and fence work-group and global memory, so device ordering is unchanged. The free function is part of SYCL 2020 and exists in every oneAPI release the project supports, so no version guard is needed. This is an upstream-compatibility fix; no SYCL behaviour changes.
+
+## 22 M7 as implemented
+
+M7a defines the common matrix-accumulate contract and one CUDA adapter. It does not yet feed the native path from the GEMM register tile; that integration is the remaining M7b work.
+
+### Contract
+
+`include/alpaka/onAcc/matrix.hpp` defines one function symbol, `onAcc::matrix::MatrixAccumulate`, with a generic alpaka fallback and backend overloads constrained by type, shape and API/device kind. Two fragment families share it:
+
+- Local fragments (`RegisterTile<T_Acc, TM, TN>`, `ColumnFragment<T_In, TM>`, `RowFragment<T_In, TN>`) are per-worker register blocks. `C += a * b` is the outer product of one A column and one B row. Participation is local: every worker updates only its own tile, a call is synchronous, and no cross-worker visibility or barrier is implied. The fallback is the register-blocked SIMD/FMA path used by the GEMM inner loop.
+- Warp fragments (`WarpAccumulator`, `WarpOperandA`, `WarpOperandB`) are the portable per-lane layout of one `m16n8k16` step: 4 fp32 accumulators, 8 A values and 4 B values per lane. Participation is exactly one 32-lane sub-warp, the call is synchronous and collective, and the adopted C layout is the documented row/column mapping in the header, not a backend-private register order.
+
+The numerical contract permits `Float16`/`BFloat16` inputs with fp32 accumulation, strict fp32 with fp32 accumulation, and strict fp64 with fp64 accumulation. 16-bit values convert exactly to fp32; fp32 and fp64 are never routed through a 16-bit native instruction. Fragments are register value types, so no alignment beyond the element type is required; the warp load/store helpers require a contiguous row-major 16x16 or 16x8 tile.
+
+### Capability rules
+
+`matrixAccumulateSupported<T_In, T_Acc, Quantum, Api, DeviceKind>()` is a compile-time tri-state. `no` covers every combination without a native implementation, including wrong types, wrong quantum and every non-CUDA API. On the host pass of a CUDA compilation the target architecture is not a C++ type, so the answer is `unknown`, never `yes`. On a CUDA device pass the descriptor returns `yes` only for `ALPAKA_ARCH_PTX >= 8.0`. `matrix::available(device)` is the runtime query: it reads compute capability through `cudaDeviceGetAttribute`, returns `yes` for 8.0 and newer, `no` below, and `unknown` when the query fails.
+
+Architecture legality lives in the backend header `include/alpaka/api/cuda/matrix.hpp`. The CUDA overload is absent from a device pass below sm_80, so Volta (sm_70) and Turing (sm_75) instantiate the portable warp fallback instead of an illegal instruction. CUDA 12.5 and 13.4 document `mma.m16n8k16` for fp16 and bf16 from sm_80; sm_75 has `m16n8k8` and sm_70 only `m8n8k4`. This revision implements none of the older shapes and does not claim them.
+
+### Fallback behaviour
+
+The generic fallback is the default. For local fragments it is the register-blocked SIMD/FMA accumulation. For warp fragments it reconstructs each lane's A and B operands with `onAcc::warp::shfl` and accumulates in fp32; it needs a hardware warp of at least 32 lanes, so the host warp (one lane) never instantiates it. Both fallbacks are instantiated through the same symbol when the native overload is not viable, so an unsupported native combination compiles and runs on the fallback.
+
+### Evidence
+
+Builds and runs, no timing:
+
+| Target | Toolchain | Architecture | Path | Evidence |
+| --- | --- | --- | --- | --- |
+| hal | CUDA 13.4, sm_80 | A30 | native fp16 and bf16 | `devicePassDecision=yes`, `runtimeAvailability=yes`; SASS contains `HMMA.16816.F32` and `HMMA.16816.F32.BF16`; warp results match the local fallback and a double reference |
+| fwk394 | CUDA 12.5, sm_70 + sm_75 | GV100 (sm_70), RTX 2080 Ti (sm_75) | fallback | `devicePassDecision=no`, `runtimeAvailability=no`; SASS contains no `HMMA`; warp results match the fallback |
+| fwk394 | g++ | host CpuSerial | local fallback | fp16/bf16, strict fp32 and fp64 pass |
+| fwk388 | ROCm 7.2, gfx906 | Radeon VII | fallback | `devicePassDecision=no`; warp results match the fallback |
+| hal | ROCm 7.2, gfx1100 | RX 7900 XTX | fallback | `devicePassDecision=no`; warp results match the fallback |
+
+`test/unit/algorithm/matrix_accumulate.cpp` is independent of GEMM. It runs the local fallback on every available executor, compares the warp contract with the local fallback and a double reference under the frozen fp32 bound, exercises strict fp32 through the warp contract while asserting the native decision is `no`, checks the compile-time capability rules, verifies the documented lane layout is a bijection, and checks the identity-tile participation case.
+
+### Not validated
+
+The GEMM kernel does not yet consume the warp contract; the register-blocked per-worker tile still uses the local fallback, so no end-to-end GEMM speed or native-integration claim is made. Volta and Turing native instruction shapes are not implemented. The warp contract is only exercised with a single 32-lane tile (one scoreboard step); multi-tile packing, asynchronous completion, and an epilogue fused into a real GEMM tile are open. The native adapter is not exercised on a non-NVIDIA backend and no oneAPI adapter exists.
