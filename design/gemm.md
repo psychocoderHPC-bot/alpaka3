@@ -1,8 +1,9 @@
 # Portable GEMM design of record
 
-Status: M0 design artifact, revision 1, 25 October 2026.
+Status: M0 design artifact, revision 2, 25 October 2026.
 Binding specification: `alpaka3-gemm-design-guide.md`, Version 2, 25 October 2026.
 Machine-readable companion: `validation/gemm-requirements.yaml`.
+External evidence root: `/tmp/alpaka-orchestration/gemm-20261025/logs`.
 This document records design decisions and evidence obligations. It does not claim measured performance, correctness on hardware, or native validation.
 
 ## 1 Scope and non-goals
@@ -25,16 +26,19 @@ Non-goals: negative strides, complex arithmetic, grouped GEMM, batched GEMM, fus
 
 ## 2 Source baseline and API inventory
 
-Verified revisions:
+Verified revisions. Both provenance records live in `logs/T5a-base-reconcile.txt` and `logs/T1-lockstep-audit.md`.
 
 | Revision | Identity | Verification | Status |
 | --- | --- | --- | --- |
-| `35ba304fd2215117cd1179830d2cbe468ced3285` | `psychocoderHPC-bot/alpaka3` branch `dev` | `git cat-file`, `git log` in the M0 clone | VERIFIED |
-| `b77f140fde4c5e94ff2a5ef6ddbc5a647a952f64` | lockstep integration branch `origin/issue-6-lockstep2` | `git rev-parse`, file inspection in the M0 clone | VERIFIED, not merged into base |
-| `05290c84b5c2349ff93585a95845e5471bba2540` | lockstep PR 7 head named by the guide | object absent from the M0 clone; GitHub API unavailable | UNVERIFIED |
-| `b7d339d07056a9a2a6c4051cc3927157bc5f0d51` | upstream dev snapshot inspected by the guide | not fetched in the M0 clone | UNVERIFIED |
+| `6f13700c390a09df818a255d53e730f1f9d69456` | `psychocoderHPC-bot/alpaka3` branch `dev` | GitHub API ref read and full-clone `git rev-parse`; canonical base | VERIFIED base |
+| `05290c84b5c2349ff93585a95845e5471bba2540` | lockstep PR 7 head, ref `origin/issue-6-lockstep2` | `gh pr view 7` reports OPEN, not draft, mergeable=MERGEABLE; full-clone diff is 14 files, +1544/-0 | VERIFIED, not merged |
+| `b7d339d07056a9a2a6c4051cc3927157bc5f0d51` | upstream `dev` snapshot inspected by the guide | full-clone `git rev-parse`; 3 commits ahead of the canonical base | VERIFIED, not merged |
+| `35ba304fd2215117cd1179830d2cbe468ced3285` | internal `gate` mirror branch `dev` | mirror ref read | STALE: 30 commits behind the canonical base; not a base |
+| `b77f140fde4c5e94ff2a5ef6ddbc5a647a952f64` | internal `gate` mirror lockstep branch | full-clone ancestry | DIVERGENT lineage (9 ahead, 7 behind PR head, fork point `8ae77718a57c38954bd5c51e49fb1194d8850085`); ignore |
 
-The base SHA has no lockstep header and no lockstep test. `include/alpaka/onAcc/lockstep.hpp` and `include/alpaka/onAcc/lockstep/` appear only on the lockstep branch. M0 must reconcile that branch before any kernel work.
+PR 7 sits on merge-base `8ae77718a57c38954bd5c51e49fb1194d8850085`. None of the 12 commits between that merge-base and the canonical base touches a file in the PR, so the rebase is a pure addition without expected content conflicts. The `gate` mirror is stale and must not be used to pin any revision.
+
+The canonical base has no lockstep header and no lockstep test. `include/alpaka/onAcc/lockstep.hpp`, `include/alpaka/onAcc/lockstep/` and `test/unit/kernel/lockstep.cpp` appear only on the PR head. The lockstep integration commit must land before kernel work.
 
 Existing APIs verified at the base SHA:
 
@@ -52,7 +56,23 @@ Existing APIs verified at the base SHA:
 | `ALPAKA_FN_SYMBOL`, `alpakaFnDispatch`, `Symbol::Spec<api, deviceKind>` | `include/alpaka/fn.hpp`, `docs/source/tutorial/vendorInterop.rst` | vendor symbol dispatch |
 | `getSimdFrameSpec`, host `transform` | `include/alpaka/onHost/internal/interface.hpp`, `include/alpaka/onHost/algo/internal/transform.hpp` | host frame selection pattern |
 
-Lockstep APIs verified on the lockstep branch only: `onAcc::makeLockstep`, `LockstepScope::var()`, `LockstepScope::concurrent()`, `LockstepVar`, `MappedData`, `RegisterSimdRef`, `onAcc::map()`.
+Lockstep APIs verified on PR 7 head only, absent from the canonical base: `onAcc::makeLockstep`, `LockstepScope::var()`, `LockstepScope::concurrent()`, `LockstepVar`, `MappedData`, `RegisterSimdRef`, `onAcc::map()`.
+
+### 2.1 Lockstep audit result
+
+The audit at `05290c84` (`logs/T1-lockstep-audit.md`) covers the six items the guide requires. Four items are OK as written:
+
+| Item | Verdict | Evidence |
+| --- | --- | --- |
+| 1 `BindValueType_t` lazy selection | OK | `std::conditional_t` selects one branch, so the unselected `SetValueType_t` is never instantiated; the explicit value-type requirement for a first `map()` argument is documented |
+| 2 accelerator reference lifetime | OK | `LockstepScope` stores `T_Acc const&`; all in-tree uses are inside the kernel functor where `acc` is live; no compile-time guard prevents misuse outside a kernel |
+| 3 const local binding | OK | the const `bind` overload yields `RegisterSimdRef<T const, W>`; load is valid and a store is a compile error |
+| 5 ownership stability across passes | OK | `var<T>()` fixes the slot count at construction; successive `concurrent()` calls see the same per-worker slot range; the docstring wording needs clarification only |
+
+Two items remain open defects:
+
+- Item 4. Zero logical extent is safe and workers greater than elements is bounded, but a zero worker extent reaches `divCeil(N, 0)` in the consteval `getLockstepSimdWidth` two-argument overload with no guard. No test covers it. Closing regression: `zero_worker_rejection` (plus `zero_extent`), tracked by `S8-STRUCT-simd-slots`.
+- Item 6. The no-collectives and no-tail-divergence rule exists only in a private doxygen `@attention` on `foreachImpl`. Public `concurrent()` documentation and `docs/source/tutorial/lockstep.rst` do not state it. Closing regression: `tail_callback_collective_contract`, tracked by `S8-PIPE-state-machine`.
 
 Proposed new APIs, not present at either verified revision:
 
@@ -136,6 +156,8 @@ Contract details:
 - An FP64-incapable device is never reported as an FP64 pass.
 - The implementation never lowers precision, calls vendor GEMM internally, or weakens the source constraint to pass a benchmark.
 
+Hardware consequence, from the section 11 inventory: no reachable target exposes `avx512_bf16` or `amx_tile`, so FP16 and BF16 arithmetic is generic emulation on every CPU target. The only native matrix scope is CUDA Volta/Turing/Ampere, oneAPI Arc A770 and HIP gfx1100. The gfx906 target has no matrix cores. G9 native records cover those targets; every other target passes on the tested fallback.
+
 ## 5 Common source boundary and vendor dispatch
 
 The GEMM kernel and its control flow stay common. Common code contains no backend-specific GEMM body, no architecture-name branch, no backend-selection `#ifdef`, and no special single-thread execution path.
@@ -155,7 +177,7 @@ Dispatch rule:
 
 Common GEMM code invokes only the portable symbol. A backend primitive implements one local or collective operation; it never contains a tiling loop, scheduler or complete GEMM.
 
-Unsupported native capability selects the tested fallback. Unavailable hardware is recorded as BLOCKED_BY_HARDWARE and never counts as native validation.
+Unsupported native capability selects the tested fallback. Unavailable hardware is recorded as BLOCKED_BY_HARDWARE and does not satisfy native validation.
 
 ## 6 Output regions, boundaries and K tails
 
@@ -219,7 +241,7 @@ Facts:
 
 - Existing: SIMD width per type, instruction parallelism estimate, cache-line bytes, shared memory per block, thread and grid limits.
 - From the executor or device: group and subgroup widths, collective legality, CPU concurrency and topology.
-- Proposed optional: L1, L2 and last-level capacity and sharing, register budget, compiled resource usage, active blocks, native matrix combinations, async-copy capability and alignment.
+- Proposed optional: L1, L2 and last-level capacity and sharing, register budget, compiled resource usage, active blocks, native matrix combinations, async-copy capability and alignment. The native matrix fact is never inferred from a backend name: section 11 records which hardware actually carries matrix instructions.
 
 Missing optional facts fall back to conservative defaults. Global memory capacity is not free memory. Temporary allocations use a checked size, a bounded workspace policy and allocation failure handling.
 
@@ -260,7 +282,7 @@ Diagnostics report facts used, missing facts, selected engine, tile shapes, thre
 
 The frozen workload manifest covers square, rectangular, small-K, skinny, boundary and tiny shapes. The release suite covers all numerical modes where supported, all four transpose combinations, compact and padded strides, and representative alpha and beta combinations. CI runs a bounded fast subset. Capacity-skipped cases stay visible and never count as wins.
 
-References are the M2 baseline, a manually indexed same-plan implementation, the best legal bounded-family candidate, and the installed vendor BLAS (CPU BLAS, cuBLAS, rocBLAS, oneMKL). Vendor libraries are references, never the implementation. Precision and math mode, layout, dimensions, thread count, device and workspace limits match. Serial CPU compares with single-thread BLAS; parallel CPU compares with equivalent resources.
+References are the M2 baseline, a manually indexed same-plan implementation, the best legal bounded-family candidate, and the installed vendor BLAS (CPU BLAS, cuBLAS, rocBLAS, oneMKL). Vendor libraries are references, never the implementation. Availability differs by target: cuBLAS 12/13 exists on both CUDA hosts, rocBLAS is absent on fwk388 and needs installation or an explicit documented omission, and oneMKL is not in the loader path on hal and needs verification. A missing vendor baseline is recorded with a reason, never treated as a pass. Precision and math mode, layout, dimensions, thread count, device and workspace limits match. Serial CPU compares with single-thread BLAS; parallel CPU compares with equivalent resources.
 
 Measurements separate device time from end-to-end queue latency, cold planning from warm execution, and report median plus variability over at least 10 samples in at least 3 rounds. Throughput uses useful `2*M*N*K` operations, not padded work. Measured tables, plots, profiler outputs and acceptance reports stay outside the checkout and appear in the incremental PR description and dated progress comments.
 
@@ -270,7 +292,7 @@ Measurements separate device time from end-to-end queue latency, cold planning f
 - New public primitives are reusable outside GEMM and ship with a non-GEMM test.
 - No second local-storage system. Reuse `scope.var()` and the lockstep concurrent path.
 - No backend-specific tiling loop, scheduler or GEMM body behind a generic name.
-- Every requirement in `validation/gemm-requirements.yaml` has an ID and one status.
+- Every requirement in `validation/gemm-requirements.yaml` has an ID, one status and one owner role. The owner roles are api-ownership, numerics, sync-progress, cpu-codegen, gpu-native, benchmark-methodology and maintainability.
 - Bounded template instantiation family, at most 64 candidate plans per operation, type and compiled target initially. Prune before expensive instantiation.
 - Record compile time and binary growth. A budget increase needs review and measured benefit.
 - Reproducible commands, plan diagnostics, numerical and boundary semantics, and reviewed tests ship in the repository.
@@ -281,18 +303,31 @@ Measurements separate device time from end-to-end queue latency, cold planning f
 
 ## 11 Hardware and environment matrix
 
-Inventory date: 25 October 2026, external run `gemm-20261025`.
+Inventory date: 25 October 2026, external run `gemm-20261025`. Every row cites the raw probe log under `/tmp/alpaka-orchestration/gemm-20261025/logs/`.
 
-| Target | Required | Observed | Status |
-| --- | --- | --- | --- |
-| hal/cuda | yes | NVIDIA A30, compute capability 8.0, CUDA 13.4 | available |
-| hal/hip | yes | no AMD GPU, no ROCm, no hipcc | unavailable |
-| hal/oneapi-cpu | yes | AMD EPYC 7452 through Intel OpenCL CPU, icpx 2026.2.0 | available |
-| hal/oneapi-gpu | yes | Intel Arc A770 through level_zero, icpx 2026.2.0 | available |
-| fwk394/cpu | yes | Intel Xeon W-2175, g++ 13.3.0 | available |
-| fwk394/cuda | yes | RTX 2080 Ti (7.5), Quadro GV100 (7.0), CUDA 12.5 | available |
+| Target | Required | Observed | Toolchain and profilers | Status | Evidence |
+| --- | --- | --- | --- | --- | --- |
+| hal/cuda | yes | NVIDIA A30 (Ampere, compute capability 8.0), 24576 MiB, driver 615.71.09 | nvcc 13.4, cuBLAS 13, ncu + nsys | available | `hwinv-hal.txt` |
+| hal/hip | yes | AMD Radeon RX 7900 XTX (Navi 31, gfx1100, wave32, 48 CUs, ~24 GiB); `/dev/kfd` and renderD129 present; ROCm 7.2.0 at `/opt/rocm`, not on PATH | hipcc 7.2.26015, clang 22.0.0git; a compile+run properties probe passed | available | `hwinv-hal-amd-recheck.txt`, `hwinv-hal-hip-stack.txt` |
+| hal/oneapi-cpu | yes | AMD EPYC 7452 32-core (avx2 only; no avx512f, avx512_bf16 or amx_tile) through Intel OpenCL CPU | oneAPI 2026.2, icpx 2026.2.0 | available | `hwinv-hal.txt`, `hwinv-amd-probe.txt` |
+| hal/oneapi-gpu | yes | Intel Arc A770 (DG2) through Level Zero and OpenCL | oneAPI 2026.2, icpx 2026.2.0 | available | `hwinv-hal.txt`, `hwinv-amd-probe.txt` |
+| fwk394/cpu | yes | Intel Xeon W-2175 (28 threads, avx512f; no avx512_bf16 or amx_tile) | g++ 13.3.0 | available | `hwinv-fwk394.txt` |
+| fwk394/cuda | yes | GeForce RTX 2080 Ti (Turing, 7.5) and Quadro GV100 (Volta, 7.0) | nvcc 12.5, cuBLAS 12, ncu only (nsys absent) | available | `hwinv-fwk394.txt` |
+| fwk388/hip | yes | AMD Radeon VII (Vega 20, gfx906, wave64); ROCm 7.2.0; connects on demand | hipcc 7.2.26015, rocprof + rocprofv3 1.1.0; rocBLAS absent | available, vendor BLAS absent | `hwinv-amd-probe.txt` |
+| rosi_v100/cuda | optional | Tesla V100-SXM2-32GB (Volta, sm_70); no ROCm; connects on demand | NVIDIA driver visible; toolkit not inventoried | optional | `hwinv-amd-probe.txt` |
+| jureca | no | unreachable after two dial attempts | not probed | BLOCKED_BY_HARDWARE | `hwinv-amd-probe.txt` |
+| jureca-h100 | no | unreachable after two dial attempts | not probed | BLOCKED_BY_HARDWARE | `hwinv-amd-probe.txt` |
 
-The three distinct NVIDIA generations across both systems are 7.0, 7.5 and 8.0. Unavailable HIP stays a required target and blocks the HIP portion of native and portability gates. It never becomes a pass.
+Facts that change coverage:
+
+- The three distinct NVIDIA generations are 7.0 (GV100), 7.5 (RTX 2080 Ti) and 8.0 (A30).
+- HIP has two endpoints: gfx1100 on hal (RDNA3, wave32) and gfx906 on fwk388 (Vega 20, wave64). Both are required for correctness and portability. Native matrix evidence is gfx1100-only; gfx906 has no matrix cores and must select the tested fallback.
+- The oneAPI GPU device exists only on hal (Arc A770). It is not a required target on fwk394 or fwk388.
+- No target exposes `avx512_bf16` or `amx_tile`; CPU FP16 and BF16 arithmetic is generic emulation everywhere.
+- Native MMA scope is CUDA Volta/Turing/Ampere, oneAPI Arc A770 and HIP gfx1100. The record `G9-native-evidence` covers fp16 on all of them; `G9-native-evidence-bf16` covers bf16 on Ampere, Arc A770 and gfx1100, because Volta and Turing have no bf16 matrix instructions.
+- ROCm sits at `/opt/rocm` on hal and no profile exports it. The inventory probed `lspci`, `/dev/kfd` and `/sys/class/drm`, which found the AMD device despite the missing PATH entry.
+- jureca and jureca-h100 stay BLOCKED_BY_HARDWARE. They never count as a pass, and they are not required targets for this release.
+- rocBLAS is absent on fwk388, so the HIP vendor baseline needs installation or a documented omission. A missing baseline fails G5 and G6 coverage for that target. oneMKL is not in the loader path on hal and remains unverified.
 
 ## 12 Milestone to evidence mapping
 
@@ -300,21 +335,21 @@ Every milestone records its source SHA, commands, external evidence links and re
 
 | Milestone | Exit evidence | Requirement records | External evidence path |
 | --- | --- | --- | --- |
-| M0 Baseline | this design, the requirements file, API and hardware inventory, harness skeleton, draft PR | all records exist with IDs and status under the top-level `owner_default`; no record claims a pass | run root: inventory and baseline logs |
-| M1 Lockstep and numerical foundations | audit regressions, FP16/BF16 conversion tests, all four modes, no duplicate local API | S8-STRUCT-simd-slots, S8-NUM-exceptional, G1-numerical | run root: unit test logs and conversion vectors |
+| M0 Baseline | this design, the requirements file, API and hardware inventory, harness skeleton, draft PR | all records exist with IDs, status and a per-requirement owner; no record claims a pass | run root: inventory and baseline logs |
+| M1 Lockstep and numerical foundations | audit regressions for items 4 and 6, FP16/BF16 conversion tests, all four modes, no duplicate local API | S8-STRUCT-simd-slots, S8-PIPE-state-machine, S8-NUM-exceptional, G1-numerical | run root: unit test logs and conversion vectors |
 | M2 Correct common GEMM | exhaustive small and adversarial shapes against an independent reference on every available target | G1-bounds, G1-ownership, G1-queue-lifetime, S8-STRUCT-ownership, S8-MEM-canaries | run root: correctness logs per target and mode |
 | M3 Layouts and register reuse | mapping bijection, generated-code evidence, operand reuse, spill check | G1-ownership, G3-abstraction-overhead, G8-resources | run root: disassembly, resource reports, explicit-plan comparison |
 | M4 Shared storage and cache reuse | correctness across stage and tile boundaries, deterministic writes, bounded scratch, reuse evidence, sequential progress | G1-bounds, G8-resources, S8-PIPE-device | run root: stage matrix, scratch accounting, reuse measurements |
 | M5 Heuristic planner | legal defaults without timing, minimal-fact fallback, held-out comparison, template and binary budgets | G4-heuristic-geomean, G4-heuristic-per-case, G10-maintainability | run root: selection logs, candidate sweep, build-size report |
 | M6 Pipeline abstraction | prologue, steady-state, drain and generation tests for every stage count, no deadlock or premature reuse | S8-PIPE-state-machine, S8-PIPE-device, G1-queue-lifetime | run root: state-machine traces and device runs |
-| M7 Native matrix operations | legal combinations on actual hardware, native instruction evidence, boundary GEMMs, correct completion and epilogue conversion | G2-vendor-symbol, G9-native-evidence, G9-fallback | run root: per-target native correctness and instruction evidence |
+| M7 Native matrix operations | legal combinations on actual hardware, native instruction evidence, boundary GEMMs, correct completion and epilogue conversion | G2-vendor-symbol, G9-native-evidence, G9-native-evidence-bf16, G9-fallback | run root: per-target native correctness and instruction evidence |
 | M8 Final portability and performance review | full suite on the final SHA and the acceptance report | G1 through G10, threshold block in the YAML | run root: acceptance.json and review records |
 
 The M0 exit also needs a reference GEMM smoke test, a timing smoke test, a benchmark harness skeleton and a backend coverage manifest. This commit delivers only the design and requirement artifacts. M0 stays open until those items and the lockstep reconciliation land.
 
 ## 13 Gate to evidence mapping
 
-All gates are pending. The target list for every record is fixed to the required matrix: hal/cuda, hal/hip, hal/oneapi-cpu, hal/oneapi-gpu, fwk394/cpu, fwk394/cuda. All four modes are required.
+All gates are pending. The required target list is hal/cuda, hal/hip, hal/oneapi-cpu, hal/oneapi-gpu, fwk394/cpu, fwk394/cuda and fwk388/hip. rosi_v100/cuda is optional coverage, not a required target. jureca and jureca-h100 are BLOCKED_BY_HARDWARE. All four numerical modes are required for correctness; native gates are scoped to native-capable targets and the modes those targets actually support.
 
 | Gate | Record IDs | Passing evidence on the final SHA | Status |
 | --- | --- | --- | --- |
@@ -326,7 +361,7 @@ All gates are pending. The target list for every record is fixed to the required
 | G6 Broad workload | G6-broad-workload, G6-floor-case | per-family matched vendor ratio and per-case floor check | pending |
 | G7 Regression | G7-regression | statistically supported regression analysis against the accepted baseline | pending |
 | G8 Resources | G8-resources | launch legality, scratch bound, resource and spill report | pending |
-| G9 Native claims | G9-native-evidence, G9-fallback | actual-hardware native correctness, instruction and performance evidence, plus fallback tests | pending |
+| G9 Native claims | G9-native-evidence, G9-native-evidence-bf16, G9-fallback | actual-hardware native correctness, instruction and performance evidence on native-capable targets, plus fallback tests | pending |
 | G10 Maintainability | G10-maintainability | reproduction check, diagnostics snapshot, template family bound | pending |
 
 The acceptance checker reads manifests and external results, rejects missing required entries, stale SHAs, unsupported substitutions, unresolved findings, failing thresholds and unapproved skips, then generates the final report. Reported completion separates FUNCTIONALLY_COMPLETE, PERFORMANCE_ACCEPTED and NATIVE_FEATURE_COMPLETE.
@@ -341,31 +376,30 @@ The YAML `thresholds:` block is the canonical form. Summary:
 - G6: per target, mode and family geometric mean vendor ratio at least 0.80; any case below 0.50 is a blocking investigation.
 - G7: no statistically supported regression above 5 percent.
 - Planning: at most 64 candidate plans per operation, type and compiled target initially, with pruning before expensive instantiation.
-- Build: compile time and binary growth are measured. The numeric absolute CI budget is UNVERIFIED and must be set from a measured base-revision build with the CI flags. The rule is frozen; the value is not.
+- Build: compile time and binary growth are measured. The numeric absolute CI budget is UNVERIFIED and must be set from a measured base-revision build with the CI flags. The rule is frozen; the value is not. Measurement protocol: build base revision `6f13700c` with the project CI configuration and flags, record CI build wall time and the produced binary size, then freeze budget = measured baseline times a margin chosen before the measurement. No number is invented here.
 - Latency-limited cases are marked and given a predeclared practical tolerance during M0. A case is never reclassified as latency-limited after it fails.
 
 ## 15 Unverified items and gaps
 
-- The guide lockstep PR head `05290c8...` and upstream dev `b7d339d...` were not available in the M0 clone. The design uses the verified lockstep branch `b77f140...` for API names. Reconcile both before kernel work.
-- HIP validation is required by the guide and unavailable on the inspected hardware. This blocks the HIP parts of G1, G5, G6, G9 and the portability goal. It is a hardware blocker, not a pass.
-- The numeric CI build budget and binary-size budget need a measured base-revision build. They remain UNVERIFIED in this commit.
-- No lockstep audit, reference GEMM, timing smoke test, benchmark harness or backend coverage manifest exists yet. M0 exit stays open.
+- The canonical base `6f13700c` and lockstep PR 7 head `05290c84` are verified. The PR is not merged and the open defect fixes are not implemented. The PR merge and the defect fixes precede kernel work.
+- HIP is available on hal/gfx1100 and fwk388/gfx906. rocBLAS is absent on fwk388, so the HIP vendor baseline is unverified. oneMKL is not in the loader path on hal and is unverified.
+- The gfx1100 WMMA compile probe failed for the exact builtin it tried (`__builtin_amdgcn_wmma_f32_16x16x16_f16` was rejected, with `__builtin_amdgcn_mfma_f32_16x16x16f16` suggested). The properties probe compiled and ran. Native HIP matrix evidence remains unvalidated: the failed probe reflects the builtin it tried, so record it as a tooling limitation.
+- The numeric CI build budget and binary-size budget need a measured base-revision build. They remain UNVERIFIED in this commit; the measurement protocol is stated in section 14.
+- The lockstep audit regressions for items 4 and 6 do not exist yet. No reference GEMM, timing smoke test, benchmark harness or backend coverage manifest exists either. M0 exit stays open.
 - No independent review of this design has occurred.
-- The `hal` host has no oneMKL in the loader path. The oneAPI CPU vendor baseline for G5 and G6 must be established or explicitly omitted with a reason.
-- GitHub API access was unavailable in the worker environment, so the bot repository base was resolved through the local gate mirror at the recorded SHA.
+- jureca and jureca-h100 stay unreachable and BLOCKED_BY_HARDWARE.
 
 ## 16 Gaps found in the guide
 
 These are recorded as discovered work. This document does not change the guide.
 
-1. Section 1 and section 13 require AMD/HIP validation on `hal`, while section 13 also says to discover actual hardware. The inspected `hal` has no AMD GPU and no ROCm. The requirement and the environment conflict until an AMD target is supplied.
-2. Section 7 M0 exit requires every requirement to have an owner. The section 11 minimal record has no owner field. This file adds a top-level `owner_default` and keeps the record schema minimal.
-3. Section 10 requires an absolute CI build budget frozen at M0 from the existing build baseline, but no baseline measurement protocol, CI job or preset is named. A numeric budget cannot be frozen without that decision.
-4. Section 10 requires a predeclared practical latency tolerance at M0 but gives no value or derivation rule.
-5. Section 7 M0 lists a benchmark harness skeleton and a reference GEMM/timing smoke test, while the design artifacts alone cannot satisfy them. M0 remains open after this commit.
-6. Section 5 pseudocode mixes existing lockstep names with proposed helpers. The boundary between verified API and design vocabulary needs an explicit inventory, which this file provides.
-7. Section 13 asks the implementation to discover the current bot-repository base branch. The worker environment had no GitHub API access, so the base came from the local gate mirror. Confirm it against the live repository before integration.
+1. Section 7 M0 exit requires every requirement to have an owner. The section 11 minimal record has no owner field. This file adds a per-requirement `owner` field and drops the earlier top-level default; the checker ignores it but preserves it.
+2. Section 10 requires an absolute CI build budget frozen at M0 from the existing build baseline, but names no baseline measurement protocol, CI job or preset. Section 14 now states the protocol; the numeric value stays UNVERIFIED.
+3. Section 10 requires a predeclared practical latency tolerance at M0 but gives no value or derivation rule.
+4. Section 7 M0 lists a benchmark harness skeleton and a reference GEMM/timing smoke test, while the design artifacts alone cannot satisfy them. M0 remains open after this commit.
+5. Section 5 pseudocode mixes existing lockstep names with proposed helpers. The boundary between verified API and design vocabulary needs an explicit inventory, which this file provides.
+6. Section 13 asks the implementation to discover the current bot-repository base branch. The worker must read the live repository or a fresh clone, never the stale `gate` mirror that lags the canonical base by 30 commits.
 
 ## 17 Review record
 
-Reviewer: none yet. Verdict: pending. No independent review of this design has occurred. Owner: gemm-implementation.
+Reviewer: none yet. Verdict: pending. No independent review of this design has occurred. Each requirement names its own owner role; the review record itself is owned by maintainability.
