@@ -180,7 +180,8 @@ namespace
         Matrix<T> const& cOld,
         T alpha,
         T beta,
-        NumericMode mode)
+        NumericMode mode,
+        onHost::GemmStagingConfig staging = {})
     {
         std::size_t const m = cOld.logicalRows;
         std::size_t const n = cOld.logicalCols;
@@ -235,7 +236,9 @@ namespace
             viewB,
             alpha,
             beta,
-            mode == NumericMode::fp64 ? onHost::GemmNumericMode::fp64 : onHost::GemmNumericMode::fp32);
+            mode == NumericMode::fp64 ? onHost::GemmNumericMode::fp64 : onHost::GemmNumericMode::fp32,
+            onHost::GemmKernel::registerBlocked,
+            staging);
 
         std::vector<T> candidate(cOld.host.size());
         onHost::memcpy(queue, candidate, dC);
@@ -267,7 +270,8 @@ namespace
         NumericMode mode,
         std::size_t padding,
         std::size_t offset,
-        std::uint64_t seed)
+        std::uint64_t seed,
+        onHost::GemmStagingConfig staging = {})
     {
         CAPTURE(shape.m, shape.n, shape.k, variant.alpha, variant.beta);
         CAPTURE(static_cast<int>(variant.layout), static_cast<int>(variant.opA), static_cast<int>(variant.opB));
@@ -287,7 +291,8 @@ namespace
             c,
             static_cast<T>(variant.alpha),
             static_cast<T>(variant.beta),
-            mode);
+            mode,
+            staging);
 
         if(shape.m == 0u || shape.n == 0u)
             return report;
@@ -385,7 +390,8 @@ namespace
         float alpha,
         float beta,
         NumericMode mode,
-        onHost::GemmNumericMode hostMode)
+        onHost::GemmNumericMode hostMode,
+        onHost::GemmStagingConfig staging = {})
     {
         Matrix<Storage> const a = quantizeMatrix<Storage>(aOriginal);
         Matrix<Storage> const b = quantizeMatrix<Storage>(bOriginal);
@@ -431,7 +437,17 @@ namespace
         auto const viewB = b.deviceView(onHost::data(dB) + b.offset);
         auto const viewC = cOld.deviceView(onHost::data(dC) + cOld.offset);
 
-        onHost::gemm(queue, exec, viewC, viewA, viewB, alpha, beta, hostMode);
+        onHost::gemm(
+            queue,
+            exec,
+            viewC,
+            viewA,
+            viewB,
+            alpha,
+            beta,
+            hostMode,
+            onHost::GemmKernel::registerBlocked,
+            staging);
 
         std::vector<float> candidate(cOld.host.size());
         onHost::memcpy(queue, candidate, dC);
@@ -476,7 +492,8 @@ namespace
         onHost::GemmNumericMode hostMode,
         std::size_t padding,
         std::size_t offset,
-        std::uint64_t seed)
+        std::uint64_t seed,
+        onHost::GemmStagingConfig staging = {})
     {
         CAPTURE(shape.m, shape.n, shape.k, variant.alpha, variant.beta);
         CAPTURE(static_cast<int>(variant.layout), static_cast<int>(variant.opA), static_cast<int>(variant.opB));
@@ -497,7 +514,8 @@ namespace
             static_cast<float>(variant.alpha),
             static_cast<float>(variant.beta),
             mode,
-            hostMode);
+            hostMode,
+            staging);
 
         if(shape.m == 0u || shape.n == 0u)
             return report;
@@ -529,6 +547,15 @@ namespace
     {
         return {0.0, 1.0, -1.0, 0.5, 2.5, -0.25};
     }
+
+    /** Cooperative staging variants used to exercise every bounded ring depth. */
+    std::vector<onHost::GemmStagingConfig> cooperativeStagingConfigs()
+    {
+        return {
+            onHost::GemmStagingConfig{onHost::GemmStaging::cooperative, 1u},
+            onHost::GemmStagingConfig{onHost::GemmStaging::cooperative, 2u},
+            onHost::GemmStagingConfig{onHost::GemmStaging::cooperative, 3u}};
+    }
 } // namespace
 
 TEMPLATE_LIST_TEST_CASE("gemm exhaustive small shapes", "[gemm][numerics]", TestBackends)
@@ -540,6 +567,7 @@ TEMPLATE_LIST_TEST_CASE("gemm exhaustive small shapes", "[gemm][numerics]", Test
 
     std::uint64_t seed = 0x1234u;
     long double worstScaled = 0.0L;
+    long double worstStaged = 0.0L;
     for(std::size_t m = 0u; m <= 17u; ++m)
         for(std::size_t n = 0u; n <= 17u; ++n)
             for(std::size_t k = 0u; k <= 17u; ++k)
@@ -547,6 +575,7 @@ TEMPLATE_LIST_TEST_CASE("gemm exhaustive small shapes", "[gemm][numerics]", Test
                 Variant variant;
                 variant.alpha = (m + n + k) % 2u == 0u ? 1.0 : 0.75;
                 variant.beta = (m + n + k) % 3u == 0u ? 0.0 : -0.5;
+                std::uint64_t const caseSeed = seed++;
                 auto const report = checkCase<float, double>(
                     device,
                     exec,
@@ -556,11 +585,28 @@ TEMPLATE_LIST_TEST_CASE("gemm exhaustive small shapes", "[gemm][numerics]", Test
                     NumericMode::fp32,
                     0u,
                     0u,
-                    seed++);
+                    caseSeed);
                 if(m != 0u && n != 0u)
                     worstScaled = std::max(worstScaled, report.maxScaledError);
+                for(auto const& staging : cooperativeStagingConfigs())
+                {
+                    auto const staged = checkCase<float, double>(
+                        device,
+                        exec,
+                        queue,
+                        Shape{m, n, k},
+                        variant,
+                        NumericMode::fp32,
+                        0u,
+                        0u,
+                        caseSeed,
+                        staging);
+                    if(m != 0u && n != 0u)
+                        worstStaged = std::max(worstStaged, staged.maxScaledError);
+                }
             }
-    std::cout << "[fp32] worst scaled error " << static_cast<double>(worstScaled) << "\n";
+    std::cout << "[fp32] worst scaled error " << static_cast<double>(worstScaled) << ", staged "
+              << static_cast<double>(worstStaged) << "\n";
 }
 
 TEMPLATE_LIST_TEST_CASE("gemm transpose layout and alpha beta matrix", "[gemm][numerics]", TestBackends)
@@ -669,7 +715,20 @@ TEMPLATE_LIST_TEST_CASE("gemm K tile boundaries and non divisible shapes", "[gem
         Variant variant;
         variant.alpha = -2.0;
         variant.beta = 0.25;
-        checkCase<float, double>(device, exec, queue, shape, variant, NumericMode::fp32, 0u, 0u, seed++);
+        std::uint64_t const caseSeed = seed++;
+        checkCase<float, double>(device, exec, queue, shape, variant, NumericMode::fp32, 0u, 0u, caseSeed);
+        for(auto const& staging : cooperativeStagingConfigs())
+            checkCase<float, double>(
+                device,
+                exec,
+                queue,
+                shape,
+                variant,
+                NumericMode::fp32,
+                0u,
+                0u,
+                caseSeed,
+                staging);
     }
 }
 
@@ -729,6 +788,7 @@ TEMPLATE_LIST_TEST_CASE("gemm FP64 mode", "[gemm][numerics]", TestBackends)
     auto queue = device.makeQueue();
 
     long double worstScaled = 0.0L;
+    long double worstStaged = 0.0L;
     for(Shape const shape : {Shape{1u, 1u, 1u}, Shape{3u, 5u, 7u}, Shape{8u, 9u, 16u}, Shape{17u, 15u, 15u}})
     {
         for(int op = 0; op < 4; ++op)
@@ -738,6 +798,7 @@ TEMPLATE_LIST_TEST_CASE("gemm FP64 mode", "[gemm][numerics]", TestBackends)
             variant.opB = (op & 2) != 0 ? onHost::GemmOp::transpose : onHost::GemmOp::none;
             variant.alpha = 1.25;
             variant.beta = -0.75;
+            std::uint64_t const caseSeed = 0x6464u + static_cast<std::uint64_t>(op);
             auto const report = checkCase<double, long double>(
                 device,
                 exec,
@@ -747,11 +808,27 @@ TEMPLATE_LIST_TEST_CASE("gemm FP64 mode", "[gemm][numerics]", TestBackends)
                 NumericMode::fp64,
                 3u,
                 1u,
-                0x6464u + static_cast<std::uint64_t>(op));
+                caseSeed);
             worstScaled = std::max(worstScaled, report.maxScaledError);
+            for(auto const& staging : cooperativeStagingConfigs())
+            {
+                auto const staged = checkCase<double, long double>(
+                    device,
+                    exec,
+                    queue,
+                    shape,
+                    variant,
+                    NumericMode::fp64,
+                    3u,
+                    1u,
+                    caseSeed,
+                    staging);
+                worstStaged = std::max(worstStaged, staged.maxScaledError);
+            }
         }
     }
-    std::cout << "[fp64] worst scaled error " << static_cast<double>(worstScaled) << "\n";
+    std::cout << "[fp64] worst scaled error " << static_cast<double>(worstScaled) << ", staged "
+              << static_cast<double>(worstStaged) << "\n";
 }
 
 TEMPLATE_LIST_TEST_CASE("gemm host validation rejects invalid problems", "[gemm][validation]", TestBackends)
@@ -909,6 +986,7 @@ TEMPLATE_LIST_TEST_CASE(
     auto const runMode = [&]<typename Storage>(NumericMode mode, onHost::GemmNumericMode hostMode, char const* label)
     {
         double worstScaled = 0.0;
+        double worstStaged = 0.0;
         double worstQuantization = 0.0;
         std::uint64_t seed = 0x16u;
         for(std::size_t m = 0u; m <= 7u; ++m)
@@ -918,6 +996,7 @@ TEMPLATE_LIST_TEST_CASE(
                     Variant variant;
                     variant.alpha = (m + n + k) % 2u == 0u ? 1.0 : 0.75;
                     variant.beta = (m + n + k) % 3u == 0u ? 0.0 : -0.5;
+                    std::uint64_t const caseSeed = seed++;
                     auto const report = checkMixedCase<Storage, double>(
                         device,
                         exec,
@@ -928,7 +1007,7 @@ TEMPLATE_LIST_TEST_CASE(
                         hostMode,
                         0u,
                         0u,
-                        seed++);
+                        caseSeed);
                     if(m != 0u && n != 0u)
                     {
                         worstScaled
@@ -938,9 +1017,29 @@ TEMPLATE_LIST_TEST_CASE(
                                 worstQuantization,
                                 static_cast<double>(report.quantization.maxAbsError));
                     }
+                    for(auto const& staging : cooperativeStagingConfigs())
+                    {
+                        auto const staged = checkMixedCase<Storage, double>(
+                            device,
+                            exec,
+                            queue,
+                            Shape{m, n, k},
+                            variant,
+                            mode,
+                            hostMode,
+                            0u,
+                            0u,
+                            caseSeed,
+                            staging);
+                        if(m != 0u && n != 0u)
+                            worstStaged = std::max<double>(
+                                worstStaged,
+                                static_cast<double>(staged.accumulation.maxScaledError));
+                    }
                 }
-        std::cout << "[" << label << "] worst scaled error " << static_cast<double>(worstScaled)
-                  << ", worst input quantization error " << static_cast<double>(worstQuantization) << "\n";
+        std::cout << "[" << label << "] worst scaled error " << static_cast<double>(worstScaled) << ", staged "
+                  << static_cast<double>(worstStaged) << ", worst input quantization error "
+                  << static_cast<double>(worstQuantization) << "\n";
     };
 
     runMode.template operator()<Float16>(NumericMode::fp16ToFp32, onHost::GemmNumericMode::fp16ToFp32, "fp16ToFp32");
@@ -971,6 +1070,7 @@ TEMPLATE_LIST_TEST_CASE(
     auto const runMode = [&]<typename Storage>(NumericMode mode, onHost::GemmNumericMode hostMode, char const* label)
     {
         double worstScaled = 0.0;
+        double worstStaged = 0.0;
         double worstQuantization = 0.0;
         std::uint64_t seed = 0x5a5au;
         for(auto const& shape : shapes)
@@ -984,6 +1084,7 @@ TEMPLATE_LIST_TEST_CASE(
                         variant.opB = (op & 2) != 0 ? onHost::GemmOp::transpose : onHost::GemmOp::none;
                         variant.alpha = 1.25;
                         variant.beta = -0.75;
+                        std::uint64_t const caseSeed = seed++;
                         auto const report = checkMixedCase<Storage, double>(
                             device,
                             exec,
@@ -994,7 +1095,7 @@ TEMPLATE_LIST_TEST_CASE(
                             hostMode,
                             3u,
                             offset,
-                            seed++);
+                            caseSeed);
                         if(shape.m != 0u && shape.n != 0u)
                         {
                             worstScaled = std::max<double>(
@@ -1005,9 +1106,29 @@ TEMPLATE_LIST_TEST_CASE(
                                     worstQuantization,
                                     static_cast<double>(report.quantization.maxAbsError));
                         }
+                        for(auto const& staging : cooperativeStagingConfigs())
+                        {
+                            auto const staged = checkMixedCase<Storage, double>(
+                                device,
+                                exec,
+                                queue,
+                                shape,
+                                variant,
+                                mode,
+                                hostMode,
+                                3u,
+                                offset,
+                                caseSeed,
+                                staging);
+                            if(shape.m != 0u && shape.n != 0u)
+                                worstStaged = std::max<double>(
+                                    worstStaged,
+                                    static_cast<double>(staged.accumulation.maxScaledError));
+                        }
                     }
         std::cout << "[" << label << "] adversarial worst scaled error " << static_cast<double>(worstScaled)
-                  << ", worst input quantization error " << static_cast<double>(worstQuantization) << "\n";
+                  << ", staged " << static_cast<double>(worstStaged) << ", worst input quantization error "
+                  << static_cast<double>(worstQuantization) << "\n";
     };
 
     runMode.template operator()<Float16>(NumericMode::fp16ToFp32, onHost::GemmNumericMode::fp16ToFp32, "fp16ToFp32");

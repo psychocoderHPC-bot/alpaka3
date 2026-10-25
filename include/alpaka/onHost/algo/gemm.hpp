@@ -25,6 +25,9 @@ namespace alpaka::onHost
      * @param beta scalar multiplier of the incoming C
      * @param mode numerical mode, defaults to strict FP32
      * @param kernel multiply-accumulate implementation, defaults to the M3 register-blocked outer-product path
+     * @param staging operand supply policy of the register-blocked path, defaults to the compile-time configuration
+     *        value (the direct global-load path). The cooperative policy stages each K block in block-shared memory
+     *        and rejects a request whose bounded scratch exceeds the device's shared-memory limit.
      *
      * @throws std::invalid_argument for invalid dimensions, layouts, modes, overlapping storage or overflowing size
      *         and launch arithmetic
@@ -41,14 +44,15 @@ namespace alpaka::onHost
         T_Alpha alpha,
         T_Beta beta,
         GemmNumericMode mode = GemmNumericMode::fp32,
-        GemmKernel kernel = GemmKernel::registerBlocked)
+        GemmKernel kernel = GemmKernel::registerBlocked,
+        GemmStagingConfig staging = {})
     {
         static_assert(std::is_arithmetic_v<std::remove_cv_t<T_Alpha>>, "alpha must be an arithmetic scalar");
         static_assert(std::is_arithmetic_v<std::remove_cv_t<T_Beta>>, "beta must be an arithmetic scalar");
 
         if constexpr(exec == alpaka::exec::anyExecutor)
         {
-            gemm(queue, defaultExecutor(queue.getDevice()), c, a, b, alpha, beta, mode, kernel);
+            gemm(queue, defaultExecutor(queue.getDevice()), c, a, b, alpha, beta, mode, kernel, staging);
         }
         else
         {
@@ -63,7 +67,7 @@ namespace alpaka::onHost
                 if constexpr(
                     std::same_as<CType, T_Acc> && std::same_as<AType, T_AStorage> && std::same_as<BType, T_BStorage>)
                 {
-                    internal::executeGemm<T_Acc>(queue, exec, c, a, b, alpha, beta, kernel);
+                    internal::executeGemm<T_Acc>(queue, exec, c, a, b, alpha, beta, kernel, staging);
                 }
                 else
                 {
@@ -102,9 +106,10 @@ namespace alpaka::onHost
         T_Alpha alpha,
         T_Beta beta,
         GemmNumericMode mode = GemmNumericMode::fp32,
-        GemmKernel kernel = GemmKernel::registerBlocked)
+        GemmKernel kernel = GemmKernel::registerBlocked,
+        GemmStagingConfig staging = {})
     {
-        gemm(queue, defaultExecutor(queue.getDevice()), c, a, b, alpha, beta, mode, kernel);
+        gemm(queue, defaultExecutor(queue.getDevice()), c, a, b, alpha, beta, mode, kernel, staging);
     }
 
     /** @} */

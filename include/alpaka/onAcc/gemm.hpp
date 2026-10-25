@@ -6,15 +6,20 @@
 
 #include "alpaka/CVec.hpp"
 #include "alpaka/Simd.hpp"
+#include "alpaka/UniqueId.hpp"
 #include "alpaka/Vec.hpp"
 #include "alpaka/core/common.hpp"
 #include "alpaka/onAcc/Acc.hpp"
 #include "alpaka/onAcc/fragment.hpp"
 #include "alpaka/onAcc/lockstep.hpp"
+#include "alpaka/onAcc/staging.hpp"
 #include "alpaka/tag.hpp"
 
+#include <algorithm>
 #include <cstdint>
+#include <limits>
 #include <type_traits>
+#include <utility>
 
 /** @file
  *
@@ -45,6 +50,31 @@ namespace alpaka::onAcc::gemm
                 return value;
             }
         }
+
+        /** Read-only view over one staged operand panel.
+         *
+         * Both panels are tile-local and row-major: A is blockM x BK, B is BK x blockN. Every value was written by
+         * the cooperative fill, so the compute phase never reads uninitialised shared memory.
+         */
+        template<typename T>
+        struct StagedPanelView
+        {
+            T* data{};
+            uint32_t ld{};
+
+            ALPAKA_FN_INLINE ALPAKA_FN_ACC constexpr T at(uint64_t row, uint64_t col) const
+            {
+                return data[static_cast<std::size_t>(row) * ld + static_cast<std::size_t>(col)];
+            }
+        };
+
+        /** The two tile-local panels of one stage. */
+        template<typename T>
+        struct StagedPanels
+        {
+            StagedPanelView<T> a;
+            StagedPanelView<T> b;
+        };
 
         /** Linear index of the block (frame) within the launched grid. */
         template<typename T_Acc>
@@ -202,6 +232,8 @@ namespace alpaka::onAcc::gemm
      * @tparam T_WR worker stripes in the M direction
      * @tparam T_WC worker stripes in the N direction
      * @tparam T_BK number of K elements processed per step
+     * @tparam T_STAGES stage count of the synchronous cooperative staging policy. Zero keeps the direct global-load
+     *         path; a positive value stages the A and B panels of each K block in block-shared memory.
      */
     template<
         typename T_Accumulator,
@@ -214,7 +246,8 @@ namespace alpaka::onAcc::gemm
         uint32_t T_TN,
         uint32_t T_WR,
         uint32_t T_WC,
-        uint32_t T_BK>
+        uint32_t T_BK,
+        uint32_t T_STAGES = 0u>
     struct RegisterBlockedGemmTileKernel
     {
         using Accumulator = T_Accumulator;
@@ -288,42 +321,138 @@ namespace alpaka::onAcc::gemm
                         accValues[slot] = accumulator.pack(slot);
                     });
 
-                for(uint64_t k0 = 0u; k0 < k;)
+                // Register-blocked outer product for the currently loaded operand fragment. Both policies share this
+                // body, so staging changes only where the operands come from.
+                auto const multiplyLoadedOperands = [&]()
                 {
-                    for(uint32_t kk = 0u; kk < T_BK; ++kk)
+                    // Hoist the B row into registers once: every M-row reuses the same T_TN values.
+                    std::array<fragment::SimdValue<AccumulatorValue, width>, packs> bValues{};
+                    fragment::staticFor<0u, packs>(
+                        [&](auto packConst)
+                        {
+                            constexpr uint32_t pack = decltype(packConst)::value;
+                            bValues[pack] = operands.b(pack);
+                        });
+
+                    fragment::staticFor<0u, T_TM>(
+                        [&](auto rowConst)
+                        {
+                            constexpr uint32_t row = decltype(rowConst)::value;
+                            AccumulatorValue const av = operands.broadcastA(row).value;
+                            fragment::staticFor<0u, packs>(
+                                [&](auto packConst)
+                                {
+                                    constexpr uint32_t pack = decltype(packConst)::value;
+                                    constexpr uint32_t slot = row * packs + pack;
+                                    accValues[slot] = accValues[slot] + av * bValues[pack];
+                                });
+                        });
+                };
+
+                if constexpr(T_STAGES == 0u)
+                {
+                    for(uint64_t k0 = 0u; k0 < k;)
                     {
-                        uint64_t const kIndex = k0 + static_cast<uint64_t>(kk);
-                        // Test every coordinate before the load; invalid operands are exact zeros.
-                        operands.loadColumn(a, ownership.workerOriginM(), kIndex, m, k);
-                        operands.loadRow(b, kIndex, ownership.workerOriginN(), k, n);
+                        for(uint32_t kk = 0u; kk < T_BK; ++kk)
+                        {
+                            uint64_t const kIndex = k0 + static_cast<uint64_t>(kk);
+                            // Test every coordinate before the load; invalid operands are exact zeros.
+                            operands.loadColumn(a, ownership.workerOriginM(), kIndex, m, k);
+                            operands.loadRow(b, kIndex, ownership.workerOriginN(), k, n);
+                            multiplyLoadedOperands();
+                        }
 
-                        // Hoist the B row into registers once: every M-row reuses the same T_TN values.
-                        std::array<fragment::SimdValue<AccumulatorValue, width>, packs> bValues{};
-                        fragment::staticFor<0u, packs>(
-                            [&](auto packConst)
-                            {
-                                constexpr uint32_t pack = decltype(packConst)::value;
-                                bValues[pack] = operands.b(pack);
-                            });
-
-                        fragment::staticFor<0u, T_TM>(
-                            [&](auto rowConst)
-                            {
-                                constexpr uint32_t row = decltype(rowConst)::value;
-                                AccumulatorValue const av = operands.broadcastA(row).value;
-                                fragment::staticFor<0u, packs>(
-                                    [&](auto packConst)
-                                    {
-                                        constexpr uint32_t pack = decltype(packConst)::value;
-                                        constexpr uint32_t slot = row * packs + pack;
-                                        accValues[slot] = accValues[slot] + av * bValues[pack];
-                                    });
-                            });
+                        if(k - k0 <= static_cast<uint64_t>(T_BK))
+                            break;
+                        k0 += static_cast<uint64_t>(T_BK);
                     }
+                }
+                else
+                {
+                    // Synchronous cooperative staging. The panels are block tile local: A is blockM x BK, B is
+                    // BK x blockN. One stage holds both panels back to back, so the scratch requirement is
+                    // T_STAGES * (blockM * BK + BK * blockN) * sizeof(accumulator).
+                    constexpr uint32_t panelElements = blockM * T_BK + T_BK * blockN;
+                    static_assert(
+                        panelElements <= std::numeric_limits<uint32_t>::max(),
+                        "GEMM: one staging panel does not fit a 32-bit shared extent.");
+                    auto shared = onAcc::declareSharedMdArray<AccumulatorValue, uniqueId()>(
+                        acc,
+                        CVec<uint32_t, T_STAGES, panelElements>{});
+                    staging::SyncStageRing<AccumulatorValue, T_STAGES, panelElements> stages;
+                    stages.storage = shared.data();
 
-                    if(k - k0 <= static_cast<uint64_t>(T_BK))
-                        break;
-                    k0 += static_cast<uint64_t>(T_BK);
+                    auto const panelOf = [&](typename staging::StageTracker<T_STAGES>::Token token)
+                    {
+                        AccumulatorValue* const base = stages.panel(token);
+                        return internal::StagedPanels<AccumulatorValue>{
+                            internal::StagedPanelView<AccumulatorValue>{base, T_BK},
+                            internal::StagedPanelView<AccumulatorValue>{base + blockM * T_BK, blockN}};
+                    };
+
+                    // Fill one K block cooperatively. Coordinates are tested before the load; an invalid halo entry
+                    // becomes an exact zero. The loop is strided by the worker index, so a single-thread executor
+                    // fills the complete panel itself and a cooperative phase never waits for an unscheduled worker.
+                    auto const fillBatch = [&](uint64_t batch, typename staging::StageTracker<T_STAGES>::Token token)
+                    {
+                        auto const panels = panelOf(token);
+                        uint64_t const k0 = batch * static_cast<uint64_t>(T_BK);
+                        for(uint32_t e = workerIdx; e < blockM * T_BK; e += workerCount)
+                        {
+                            uint32_t const row = e / T_BK;
+                            uint32_t const kk = e % T_BK;
+                            uint64_t const globalM = originM + row;
+                            uint64_t const globalK = k0 + kk;
+                            AccumulatorValue value{0};
+                            if(globalM < m && globalK < k)
+                                value = static_cast<AccumulatorValue>(a.at(globalM, globalK));
+                            panels.a.data[e] = value;
+                        }
+                        for(uint32_t e = workerIdx; e < T_BK * blockN; e += workerCount)
+                        {
+                            uint32_t const kk = e / blockN;
+                            uint32_t const col = e % blockN;
+                            uint64_t const globalK = k0 + kk;
+                            uint64_t const globalN = originN + col;
+                            AccumulatorValue value{0};
+                            if(globalK < k && globalN < n)
+                                value = static_cast<AccumulatorValue>(b.at(globalK, globalN));
+                            panels.b.data[e] = value;
+                        }
+                    };
+
+                    uint64_t const fullBatches = k / static_cast<uint64_t>(T_BK);
+                    uint64_t const batchCount = fullBatches + (k % static_cast<uint64_t>(T_BK) != 0u ? 1u : 0u);
+                    uint64_t const prologue = std::min<std::uint64_t>(T_STAGES, batchCount);
+
+                    for(uint64_t i = 0u; i < prologue; ++i)
+                    {
+                        auto const token = stages.acquire();
+                        fillBatch(i, token);
+                        stages.commit(acc, token);
+                    }
+                    for(uint64_t i = 0u; i < batchCount; ++i)
+                    {
+                        auto const token = stages.tracker.tokenOf(i);
+                        stages.waitReady(acc, token);
+                        stages.consume(token);
+                        auto const panels = panelOf(token);
+                        for(uint32_t kk = 0u; kk < T_BK; ++kk)
+                        {
+                            operands.loadColumn(panels.a, ownership.workerRow * T_TM, kk, blockM, T_BK);
+                            operands.loadRow(panels.b, kk, ownership.workerCol * T_TN, T_BK, blockN);
+                            multiplyLoadedOperands();
+                        }
+                        stages.complete(acc, token);
+                        stages.release(token);
+                        if(i + T_STAGES < batchCount)
+                        {
+                            auto const next = stages.acquire();
+                            fillBatch(i + T_STAGES, next);
+                            stages.commit(acc, next);
+                        }
+                    }
+                    ALPAKA_ASSERT_ACC(stages.tracker.allFree());
                 }
 
                 fragment::staticFor<0u, Layout::slotCount>(

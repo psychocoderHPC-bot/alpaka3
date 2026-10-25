@@ -132,6 +132,12 @@ Staging uses verified alpaka shared storage: `declareSharedVar`, `declareSharedM
 
 The async policy preserves the same contract and uses native acceleration only where the capability is present and tested. Commit and wait participation stays converged for the native primitive. Per-worker remainder branches do not alter collective stage counts. The baseline needs no cooperative grid launch and no grid-wide synchronization.
 
+Implemented synchronous policy (M4). `onAcc::staging::StageTracker<S>` validates the acquire, fill, commit, wait, consume, complete and release transitions and tracks a per-slot generation. `onAcc::staging::SyncStageRing<T, S, E>` wraps block-shared storage from `declareSharedMdArray`; commit and complete use `onAcc::syncBlockThreads`. The common kernel fills each K-block panel cooperatively with a worker-strided loop, tests boundary coordinates before the load and writes exact zeros into the invalid halo. The register-blocked outer product then reads the panel, so the compute phase never reads uninitialised shared memory.
+
+Scratch bound. One stage holds `BM*BK + BK*BN` accumulator values. The host requires `S*(BM*BK + BK*BN)*sizeof(accumulator) + 64` bytes to fit `DeviceProperties::sharedMemPerBlockBytes` and throws `std::invalid_argument` otherwise; it never truncates the allocation. The stage count family is bounded to {1, 2, 3}.
+
+Policy selection. `GemmStaging::cooperative` is an explicit expert override. `automatic` resolves to the compile-time configuration value `internal::defaultGemmStaging`, currently `direct`, so the shipped default keeps the existing global-load path. The documented rule in `internal::stagingRule` (arithmetic intensity at least 8 and the ring fits shared memory) is the input for the M5 planner.
+
 ## 4 Numerical modes and contracts
 
 | Mode | Arithmetic contract | Forbidden shortcut |

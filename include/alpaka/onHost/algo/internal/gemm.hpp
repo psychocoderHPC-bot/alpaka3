@@ -93,6 +93,31 @@ namespace alpaka::onHost
         simple
     };
 
+    /** Operand supply policy of the register-blocked GEMM path.
+     *
+     * direct keeps the M3 path that reads A and B from global memory in the K loop. cooperative stages one A/B
+     * panel per K block in block-shared memory and reads the register-blocked outer product from there. automatic
+     * resolves to the compile-time configuration value @ref internal::defaultGemmStaging, so the shipped default is
+     * the direct path and no measurement is required to select it.
+     */
+    enum class GemmStaging : std::uint8_t
+    {
+        automatic,
+        direct,
+        cooperative
+    };
+
+    /** Staging selection and depth for the register-blocked GEMM path.
+     *
+     * stages is the synchronous ring depth of the cooperative policy and must be in {1, 2, 3}. It is ignored by the
+     * direct policy.
+     */
+    struct GemmStagingConfig
+    {
+        GemmStaging policy = GemmStaging::automatic;
+        std::uint32_t stages = 1;
+    };
+
     /** Non-owning GEMM matrix view.
      *
      * rows and cols are the *logical* extents of the view before applying op. The stored matrix therefore has
@@ -307,6 +332,57 @@ namespace alpaka::onHost
             return RegisterTileConfig{tm, tn, 1u, threads, bk};
         }
 
+        /** Compile-time configuration value for the default operand supply policy.
+         *
+         * This is the single place that decides the shipped default. It stays `direct` until a planner milestone
+         * selects staging from measured costs, so enabling cooperative staging is an explicit expert choice today.
+         */
+        inline constexpr GemmStaging defaultGemmStaging = GemmStaging::direct;
+
+        /** Whether cooperative staging fits and is expected to amortise its panel traffic.
+         *
+         * Documented placeholder rule for the later planner: stage when the tile's arithmetic intensity
+         * 2*bm*bn*bk / (bm*bk + bk*bn) reaches @p minIntensity and the stage ring fits the block-shared limit.
+         * Both arguments are element counts, not bytes, except @p sharedBytes.
+         */
+        constexpr bool stagingRule(
+            std::uint64_t bm,
+            std::uint64_t bn,
+            std::uint64_t bk,
+            std::uint64_t elementBytes,
+            std::uint64_t stages,
+            std::uint64_t sharedBytes)
+        {
+            constexpr std::uint64_t minIntensity = 8u;
+            std::uint64_t const panelElements = bm * bk + bk * bn;
+            if(panelElements == 0u)
+                return false;
+            std::uint64_t const intensity = (2u * bm * bn * bk) / panelElements;
+            std::uint64_t const required
+                = stages * panelElements * elementBytes + onAcc::staging::stageMetadataReserveBytes();
+            return intensity >= minIntensity && required <= sharedBytes;
+        }
+
+        /** Resolve an automatic request with the compile-time default, or apply the documented rule if the default
+         * itself is automatic. Explicit requests are never overridden.
+         */
+        constexpr GemmStaging resolveStaging(
+            GemmStaging requested,
+            std::uint64_t bm,
+            std::uint64_t bn,
+            std::uint64_t bk,
+            std::uint64_t elementBytes,
+            std::uint64_t stages,
+            std::uint64_t sharedBytes)
+        {
+            if(requested != GemmStaging::automatic)
+                return requested;
+            if(defaultGemmStaging != GemmStaging::automatic)
+                return defaultGemmStaging;
+            return stagingRule(bm, bn, bk, elementBytes, stages, sharedBytes) ? GemmStaging::cooperative
+                                                                              : GemmStaging::direct;
+        }
+
         struct TileRegion
         {
             std::uint64_t tileRowBegin;
@@ -480,6 +556,7 @@ namespace alpaka::onHost
             std::uint32_t T_WR,
             std::uint32_t T_WC,
             std::uint32_t T_BK,
+            std::uint32_t T_STAGES,
             std::uint32_t T_Threads,
             typename T_Acc,
             typename T_Queue,
@@ -503,6 +580,24 @@ namespace alpaka::onHost
         {
             constexpr std::uint32_t bm = T_WR * T_TM;
             constexpr std::uint32_t bn = T_WC * T_TN;
+            if constexpr(T_STAGES > 0u)
+            {
+                constexpr std::uint64_t panelElements
+                    = static_cast<std::uint64_t>(bm) * T_BK + static_cast<std::uint64_t>(T_BK) * bn;
+                static_assert(
+                    panelElements <= std::numeric_limits<std::uint32_t>::max(),
+                    "GEMM: one staging panel does not fit a 32-bit shared extent.");
+                constexpr std::uint64_t required
+                    = onAcc::staging::stageStorageBytes<T_Acc, T_STAGES, static_cast<std::uint32_t>(panelElements)>()
+                      + onAcc::staging::stageMetadataReserveBytes();
+                std::uint64_t const limit
+                    = static_cast<std::uint64_t>(queue.getDevice().getDeviceProperties().sharedMemPerBlockBytes);
+                if(required > limit)
+                    throw std::invalid_argument(
+                        std::string{"GEMM: cooperative staging with "} + std::to_string(T_STAGES) + " stages requires "
+                        + std::to_string(required) + " bytes of block-shared memory but the " + "device exposes only "
+                        + std::to_string(limit) + " bytes; reduce the stage count or use the direct path");
+            }
             TileRegions const regions = splitRegions(m, n, bm, bn);
             auto const launch = [&](TileRegion const& region)
             {
@@ -524,7 +619,8 @@ namespace alpaka::onHost
                         T_TN,
                         T_WR,
                         T_WC,
-                        T_BK>{
+                        T_BK,
+                        T_STAGES>{
                         c,
                         a,
                         b,
@@ -542,6 +638,37 @@ namespace alpaka::onHost
             launch(regions.bottom);
             launch(regions.right);
             launch(regions.corner);
+        }
+
+        /** Dispatch the cooperative staging policy over the bounded stage-count family {1, 2, 3}. */
+        template<
+            std::uint32_t T_TM,
+            std::uint32_t T_TN,
+            std::uint32_t T_WR,
+            std::uint32_t T_WC,
+            std::uint32_t T_BK,
+            std::uint32_t T_Threads,
+            typename T_Acc,
+            typename... T_Args>
+        void dispatchStagedGemm(GemmStagingConfig const& staging, T_Args&&... args)
+        {
+            switch(staging.stages)
+            {
+            case 1u:
+                launchGemmTilesRegisterBlocked<T_TM, T_TN, T_WR, T_WC, T_BK, 1u, T_Threads, T_Acc>(
+                    ALPAKA_FORWARD(args)...);
+                break;
+            case 2u:
+                launchGemmTilesRegisterBlocked<T_TM, T_TN, T_WR, T_WC, T_BK, 2u, T_Threads, T_Acc>(
+                    ALPAKA_FORWARD(args)...);
+                break;
+            case 3u:
+                launchGemmTilesRegisterBlocked<T_TM, T_TN, T_WR, T_WC, T_BK, 3u, T_Threads, T_Acc>(
+                    ALPAKA_FORWARD(args)...);
+                break;
+            default:
+                throw std::invalid_argument("GEMM: cooperative staging supports a stage count of 1, 2 or 3");
+            }
         }
 
         template<
@@ -662,7 +789,8 @@ namespace alpaka::onHost
             GemmView<T_B> b,
             T_Alpha alpha,
             T_Beta beta,
-            GemmKernel kernel)
+            GemmKernel kernel,
+            GemmStagingConfig staging)
         {
             using Api = std::remove_cvref_t<decltype(queue.getApi())>;
             using DeviceKind = std::remove_cvref_t<decltype(queue.getDeviceKind())>;
@@ -684,17 +812,41 @@ namespace alpaka::onHost
                 if(kernel == GemmKernel::registerBlocked)
                 {
                     constexpr RegisterTileConfig rb = registerTileConfig<T_Acc, Api, DeviceKind, T_Exec>();
-                    launchGemmTilesRegisterBlocked<rb.tm, rb.tn, rb.wr, rb.wc, rb.bk, blockThreads, T_Acc>(
-                        queue,
-                        exec,
-                        c,
-                        a,
-                        b,
-                        m,
-                        n,
-                        k,
-                        alpha,
-                        beta);
+                    constexpr std::uint64_t bm = static_cast<std::uint64_t>(rb.wr) * rb.tm;
+                    constexpr std::uint64_t bn = static_cast<std::uint64_t>(rb.wc) * rb.tn;
+                    std::uint64_t const sharedLimit
+                        = static_cast<std::uint64_t>(queue.getDevice().getDeviceProperties().sharedMemPerBlockBytes);
+                    GemmStaging const policy
+                        = resolveStaging(staging.policy, bm, bn, rb.bk, sizeof(T_Acc), staging.stages, sharedLimit);
+                    if(policy == GemmStaging::cooperative)
+                    {
+                        dispatchStagedGemm<rb.tm, rb.tn, rb.wr, rb.wc, rb.bk, blockThreads, T_Acc>(
+                            staging,
+                            queue,
+                            exec,
+                            c,
+                            a,
+                            b,
+                            m,
+                            n,
+                            k,
+                            alpha,
+                            beta);
+                    }
+                    else
+                    {
+                        launchGemmTilesRegisterBlocked<rb.tm, rb.tn, rb.wr, rb.wc, rb.bk, 0u, blockThreads, T_Acc>(
+                            queue,
+                            exec,
+                            c,
+                            a,
+                            b,
+                            m,
+                            n,
+                            k,
+                            alpha,
+                            beta);
+                    }
                 }
                 else
                 {
