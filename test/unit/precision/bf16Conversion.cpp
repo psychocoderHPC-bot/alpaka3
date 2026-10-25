@@ -234,3 +234,64 @@ TEST_CASE("bf16 special values", "[precision][bf16]")
             == uint16_t(bits | 0x8000u));
     }
 }
+
+namespace
+{
+    // Name the active host compiler in the diagnostics below, so a failure points at the toolchain
+    // that enabled FTZ/DAZ rather than at the BF16 conversion.
+#if defined(__INTEL_LLVM_COMPILER)
+    constexpr char const* hostCompilerName = "IntelLLVM (icx/icpx)";
+#elif defined(__INTEL_COMPILER)
+    constexpr char const* hostCompilerName = "Intel Classic (icc/icpc)";
+#elif defined(__clang__)
+    constexpr char const* hostCompilerName = "Clang";
+#elif defined(__GNUC__)
+    constexpr char const* hostCompilerName = "GCC";
+#else
+    constexpr char const* hostCompilerName = "unknown compiler";
+#endif
+} // namespace
+
+TEST_CASE("bf16 subnormal multiply-accumulate keeps exact FP32 subnormal bits", "[precision][bf16][fp-contract]")
+{
+    // This pins the precision contract, not a compiler flag. Intel C++ at -O3 with the default FP
+    // model sets MXCSR FTZ and DAZ for the whole process and never restores them; every operand or
+    // result in the FP32 subnormal range is then silently replaced by zero. Widened BF16 subnormals
+    // live exactly there, so the expected bit patterns below are the contract.
+    struct Case
+    {
+        uint16_t input;
+        uint32_t expectedMacBits;
+    };
+
+    constexpr Case cases[]{
+        {0x0001u, 0x0000'8000u}, // min subnormal 2^-133, times 0.5 is 2^-134
+        {0x8001u, 0x8000'8000u}, // negative min subnormal
+        {0x007fu, 0x003f'8000u}, // largest BF16 subnormal
+        {0x0080u, 0x0040'0000u}, // smallest BF16 normal, the product is an FP32 subnormal
+    };
+
+    for(auto const& testCase : cases)
+    {
+        // volatile keeps the widening and the multiply-accumulate at run time, so the test observes
+        // the process FP environment instead of a constant-folded result.
+        float volatile operand = BFloat16::fromBits(testCase.input).toFloat();
+        float const mac = std::fmaf(static_cast<float>(operand), 0.5f, 0.0f);
+        uint32_t const got = std::bit_cast<uint32_t>(mac);
+
+        INFO("BF16 input 0x" << std::hex << testCase.input);
+        INFO("expected 0x" << std::hex << testCase.expectedMacBits << ", got 0x" << std::hex << got);
+        if(got != testCase.expectedMacBits)
+        {
+            FAIL(
+                "BF16 subnormal widening was flushed to zero by compiler "
+                << hostCompilerName
+                << ". The host FP environment has FTZ (flush-to-zero) and DAZ (denormals-are-zero) "
+                   "enabled: icx/icpx at -O3 with the default -ffp-model write MXCSR bits 15 and 6 "
+                   "process-wide. Compile the whole program, including the entry point, with "
+                   "-ffp-model=precise, or deliberately opt in to flushed subnormals with "
+                   "alpaka_FAST_MATH=ON/alpaka_FTZ=ON and the reduced-precision contract.");
+        }
+        CHECK(got == testCase.expectedMacBits);
+    }
+}

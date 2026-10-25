@@ -85,10 +85,16 @@ independent higher-precision reference on each supported layout and transpose co
 FP16 and BF16 inputs contribute their exact FP32 value to the FP32 accumulation.
 The value stays exact also inside the FP32 subnormal range: BF16 subnormal inputs widen to FP32 subnormals and
 contribute as finite FP32 operands.
-Host builds with the Intel C++ compilers (``icx``, ``icpx``) therefore pin the host FP32 semantics to
-``-ffp-model=precise``: the default host FP model of these compilers flushes FP32 denormals to zero and would
-break the contract.
-Setting ``alpaka_FAST_MATH`` or ``alpaka_FTZ`` to ``ON`` opts out of the pin and waives this guarantee.
+
+On Intel C++ hosts (``icx``, ``icpx``) the default ``-O3`` FP model sets the MXCSR FTZ and DAZ bits once per
+translation unit and never restores them.
+That is process-wide state: as soon as one translation unit in the program uses the default model, FP32 subnormals
+are flushed for every thread, and the exact widening contract above is broken.
+The project therefore pins ``-ffp-model=precise`` for every C++ translation unit of its own targets.
+A downstream application that compiles its own entry point, test main or dependency must compile the whole program
+with ``-ffp-model=precise``; per-target flags do not help, because the first default-model translation unit wins.
+Applications that want flush behaviour keep it deliberately with ``alpaka_FAST_MATH=ON`` or ``alpaka_FTZ=ON`` and
+accept the flushed-subnormal, reduced-precision contract instead.
 
 Plan diagnostics
 ----------------
