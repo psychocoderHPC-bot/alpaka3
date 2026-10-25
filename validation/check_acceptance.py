@@ -1,24 +1,45 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: MPL-2.0
+# pylint: disable=too-many-lines,too-many-arguments,too-many-positional-arguments,too-many-locals,too-many-branches
 """Machine-checkable acceptance gate for the alpaka3 GEMM project.
 
 Usage:
     python3 validation/check_acceptance.py \
         --requirements validation/gemm-requirements.yaml \
         --run-root /external/evidence/<revision> \
-        --head-sha <40-character source SHA>
+        --head-sha <40-character source SHA> \
+        --repo /path/to/source/checkout \
+        --json-report /tmp/acceptance-report.json
 
 The checker reads a requirements YAML plus an external evidence tree containing
 ``acceptance.json`` and any number of ``samples.json`` files. It exits nonzero
 for every condition the execution guide makes blocking:
 
 * a required requirement has no acceptance entry (missing entry);
-* acceptance, sample, or entry source SHA differs from the head SHA;
+* a required target has no per-executor matrix record;
+* a target is marked ``passed`` without evidence, or is marked
+  ``unsupported``/``blocked`` without a reason;
+* a target is ``not_run`` (an explicit gap, never a pass);
+* evidence carries a source SHA that is not an ancestor-or-equal of the tested
+  head, predates the last change under ``include/alpaka/**``, or mixes SHAs
+  inside one requirement without ``allow_mixed_shas: true``;
 * a substitution is declared without approval or is not allowed;
 * a required review finding is unresolved, or the review verdict is negative;
 * a declared numeric threshold is missing or fails;
 * a skip is not explicitly approved;
-* a required target/mode pair has neither a passing sample nor an approved skip.
+* a required target/mode pair has neither a passing sample nor an approved skip;
+* a performance record lacks samples/rounds/median/host/device/tools/load
+  fields, reports a gflops value inconsistent with ``2*M*N*K/median_ns`` by more
+  than 1 percent, or was produced inside the terok container;
+* a vendor gate (G5/G6) has no matched vendor baseline for a candidate case.
+
+Exit codes let CI classify the failure:
+
+* 2: schema or evidence-integrity error;
+* 3: missing evidence;
+* 4: stale or unattributed SHA;
+* 5: threshold failure;
+* 6: unapproved skip.
 
 Evidence is deliberately external. The run root must not live inside this
 checkout unless ``--allow-run-root-inside-repo`` is passed.
@@ -37,6 +58,8 @@ requirements YAML
         modes: [fp32, fp64]
         allowed_substitutions: [cpu-fallback]
         case_ids: [square-256]         # optional sample filter
+        allow_mixed_shas: false        # optional, default false
+        vendor_baseline: true          # optional; implied for G5/G6 ids
         thresholds:
           - metric: gflops_ratio       # key inside acceptance entry metrics
             op: ">="                   # >=, >, <=, <, ==
@@ -59,6 +82,13 @@ run-root/acceptance.json
           "status": "pass",
           "source_sha": "<sha>",
           "metrics": {"gflops_ratio": 0.95},
+          "targets": {
+            "cpu-host": {
+              "status": "passed",
+              "source_sha": "<sha>",
+              "evidence": ["cpu-host/fp32/samples.json"]
+            }
+          },
           "substitutions": [{"from": "fp64", "to": "cpu-fallback", "approved": true}],
           "skips": [{"target": "gpu", "mode": "fp64", "reason": "...", "approved": true}],
           "review": {"verdict": "pass", "findings": []},
@@ -74,7 +104,27 @@ run-root/**/samples.json
       "revision": "<sha>",             # alias of source_sha
       "target": "cpu-host",
       "records": [
-        {"target": "cpu-host", "mode": "fp32", "status": "ok", "case_id": "square-256"}
+        {"target": "cpu-host", "mode": "fp32", "status": "ok", "case_id": "square-256"},
+        {
+          "kind": "performance",
+          "target": "cpu-host", "mode": "fp32", "status": "ok",
+          "m": 1024, "n": 1024, "k": 1024, "median_ns": 2000000.0,
+          "gflops": 1073.741824, "samples": 20, "rounds": 5,
+          "host": "hal", "device": "EPYC 7452",
+          "tools": {"compiler": "gcc 13", "toolkit": "oneAPI 2026.2", "driver": "n/a"},
+          "load": "idle", "governor": "performance", "threads": 28,
+          "layout": "row_major", "transpose_a": false, "transpose_b": false
+        },
+        {
+          "kind": "vendor_baseline",
+          "target": "cpu-host", "mode": "fp32", "status": "ok",
+          "m": 1024, "n": 1024, "k": 1024, "median_ns": 2000000.0,
+          "gflops": 1073.741824, "samples": 20, "rounds": 5,
+          "host": "hal", "device": "EPYC 7452",
+          "tools": {"compiler": "gcc 13", "toolkit": "oneAPI 2026.2", "driver": "n/a"},
+          "load": "idle", "governor": "performance", "threads": 28,
+          "layout": "row_major", "transpose_a": false, "transpose_b": false
+        }
       ]
     }
 """
@@ -83,7 +133,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
+import subprocess
 import sys
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -98,6 +151,51 @@ PASSING_STATUSES = {"ok", "pass", "passed", "accepted"}
 SKIPPED_STATUSES = {"skip", "skipped"}
 RESOLVED_STATUSES = {"resolved", "closed", "verified", "done"}
 REJECTED_VERDICTS = {"fail", "failed", "reject", "rejected"}
+
+TARGET_STATUSES = {"passed", "failed", "unsupported", "blocked", "vendor_unavailable", "not_run"}
+REASON_REQUIRED_TARGET_STATUSES = {"unsupported", "blocked", "vendor_unavailable"}
+PERFORMANCE_KINDS = {"performance", "benchmark", "vendor_baseline"}
+GFLOPS_TOLERANCE = 0.01
+
+EXIT_SCHEMA = 2
+EXIT_MISSING = 3
+EXIT_STALE = 4
+EXIT_THRESHOLD = 5
+EXIT_SKIP = 6
+
+SCHEMA_CATEGORIES = {
+    "invalid-requirement",
+    "invalid-acceptance",
+    "invalid-sample-file",
+    "invalid-threshold",
+    "invalid-metrics",
+    "missing-head-sha",
+    "invalid-head-sha",
+    "invalid-repository",
+    "invalid-target-status",
+    "missing-target-reason",
+    "invalid-target-matrix",
+    "performance-samples",
+    "performance-rounds",
+    "performance-median",
+    "performance-identity",
+    "performance-tools",
+    "performance-gflops",
+    "performance-environment",
+    "performance-shape",
+    "forbidden-evidence-origin",
+}
+STALE_CATEGORIES = {
+    "stale-sample-sha",
+    "stale-acceptance-sha",
+    "stale-entry-sha",
+    "stale-target-sha",
+    "stale-invalidate-sha",
+    "not-ancestor-sha",
+    "mixed-shas",
+}
+THRESHOLD_CATEGORIES = {"failing-threshold"}
+SKIP_CATEGORIES = {"unapproved-skip"}
 
 
 class Findings:
@@ -119,17 +217,16 @@ class Findings:
         """Append every finding of another instance."""
         self.items.extend(other.items)
 
+    def categories(self) -> set[str]:
+        """Return the set of categories collected so far."""
+        return {item["category"] for item in self.items}
+
 
 def normalize_sha(value: Any) -> str:
     """Normalize an optional SHA value for comparison."""
     if not isinstance(value, str):
         return ""
     return value.strip().lower()
-
-
-def sha_matches(candidate: Any, head: str) -> bool:
-    """Return whether a candidate SHA equals the normalized head SHA."""
-    return bool(head) and normalize_sha(candidate) == head
 
 
 def load_yaml(path: Path) -> Any:
@@ -438,12 +535,564 @@ def check_thresholds(
             )
 
 
+def run_git(repo: Path, arguments: list[str]) -> subprocess.CompletedProcess[str]:
+    """Run a read-only git command inside the evidence source repository."""
+    return subprocess.run(
+        ["git", "-C", str(repo), *arguments],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+
+@lru_cache(maxsize=4096)
+def _is_ancestor(repo: str, ancestor: str, descendant: str) -> bool:
+    """Return whether ancestor is an ancestor-or-equal of descendant."""
+    if ancestor == descendant:
+        return True
+    result = run_git(Path(repo), ["merge-base", "--is-ancestor", ancestor, descendant])
+    return result.returncode == 0
+
+
+def is_ancestor(repo: Path, ancestor: str, descendant: str) -> bool:
+    """Cached ancestry test for normalized commit SHAs."""
+    return _is_ancestor(str(repo.resolve()), ancestor, descendant)
+
+
+def sha_exists(repo: Path, sha: str) -> bool:
+    """Return whether the repository contains the commit."""
+    if not sha:
+        return False
+    result = run_git(repo, ["cat-file", "-e", f"{sha}^{{commit}}"])
+    return result.returncode == 0
+
+
+def last_include_change(repo: Path, head_sha: str) -> str:
+    """Return the newest commit touching include/alpaka/** up to head."""
+    result = run_git(repo, ["rev-list", "-1", head_sha, "--", "include/alpaka"])
+    if result.returncode != 0:
+        return ""
+    return normalize_sha(result.stdout.strip())
+
+
+def check_evidence_sha(
+    requirement_id: str,
+    label: str,
+    sha: Any,
+    head_sha: str,
+    repo: Path,
+    last_include: str,
+    findings: Findings,
+    stale_category: str,
+) -> str:
+    """Validate one evidence SHA and return it normalized."""
+    normalized = normalize_sha(sha)
+    if not normalized:
+        findings.add("missing-sample-sha", f"{requirement_id}: {label} has no source SHA")
+        return ""
+    if not sha_exists(repo, normalized):
+        findings.add(
+            "not-ancestor-sha",
+            f"{requirement_id}: {label} source SHA {normalized} is unknown to the source repository",
+        )
+        return normalized
+    if head_sha and not is_ancestor(repo, normalized, head_sha):
+        findings.add(
+            stale_category,
+            f"{requirement_id}: {label} source SHA {normalized} is not an ancestor of head {head_sha}",
+        )
+        return normalized
+    if last_include and not is_ancestor(repo, last_include, normalized):
+        findings.add(
+            "stale-invalidate-sha",
+            f"{requirement_id}: {label} source SHA {normalized} predates the last include/alpaka change {last_include}",
+        )
+    return normalized
+
+
+def target_matrix(entry: dict[str, Any]) -> dict[str, Any]:
+    """Return the per-target matrix records of an acceptance entry."""
+    raw = entry.get("targets")
+    if isinstance(raw, dict):
+        return {str(key): value for key, value in raw.items()}
+    matrix: dict[str, Any] = {}
+    if isinstance(raw, list):
+        for item in raw:
+            if isinstance(item, dict) and "target" in item:
+                matrix[str(item["target"])] = item
+    return matrix
+
+
+def target_evidence_paths(record: dict[str, Any]) -> list[str]:
+    """Return the evidence paths declared by a target matrix record."""
+    paths: list[str] = []
+    for key in ("evidence", "evidence_paths"):
+        for item in as_list(record.get(key)):
+            if isinstance(item, str) and item.strip():
+                paths.append(item.strip())
+    evidence_path = record.get("evidence_path")
+    if isinstance(evidence_path, str) and evidence_path.strip():
+        paths.append(evidence_path.strip())
+    return paths
+
+
+def check_target_matrix(
+    requirement: dict[str, Any],
+    entry: dict[str, Any],
+    run_root: Path,
+    head_sha: str,
+    repo: Path,
+    last_include: str,
+    findings: Findings,
+) -> list[str]:
+    """Check the per-target executor matrix and return its evidence SHAs."""
+    requirement_id = str(requirement.get("id", "<unnamed>"))
+    required_targets = [str(item) for item in as_list(requirement.get("required_targets"))]
+    matrix = target_matrix(entry)
+    shas: list[str] = []
+
+    for target in required_targets:
+        if target not in matrix:
+            findings.add("missing-target", f"{requirement_id}: required target {target} has no matrix record")
+            continue
+        record = matrix[target]
+        if not isinstance(record, dict):
+            findings.add("invalid-target-matrix", f"{requirement_id}: target {target} record is not a mapping")
+            continue
+        status = str(record.get("status", "")).lower()
+        if status not in TARGET_STATUSES:
+            findings.add(
+                "invalid-target-status",
+                f"{requirement_id}: target {target} has status {status or '<missing>'!r}; "
+                f"expected one of {sorted(TARGET_STATUSES)}",
+            )
+            continue
+
+        sha = check_evidence_sha(
+            requirement_id,
+            f"target {target}",
+            record.get("source_sha"),
+            head_sha,
+            repo,
+            last_include,
+            findings,
+            "stale-target-sha",
+        )
+        if sha:
+            shas.append(sha)
+
+        paths = target_evidence_paths(record)
+        if not paths and status != "not_run":
+            findings.add(
+                "missing-target-evidence",
+                f"{requirement_id}: target {target} is {status} but carries no evidence path",
+            )
+        for item in paths:
+            path = Path(item)
+            if not path.is_absolute():
+                path = run_root / path
+            if not path.is_file():
+                findings.add(
+                    "missing-target-evidence",
+                    f"{requirement_id}: target {target} evidence does not exist: {path}",
+                )
+
+        reason = str(record.get("reason", "")).strip()
+        if status in REASON_REQUIRED_TARGET_STATUSES and not reason:
+            findings.add(
+                "missing-target-reason",
+                f"{requirement_id}: target {target} is {status} without a non-empty reason",
+            )
+        if status == "not_run":
+            detail = f" (reason: {reason})" if reason else ""
+            findings.add(
+                "target-not-run",
+                f"{requirement_id}: target {target} is not_run and is an explicit acceptance gap{detail}",
+            )
+        elif status != "passed":
+            findings.add(
+                "target-not-passed",
+                f"{requirement_id}: target {target} is {status} and does not count as a pass",
+            )
+    return shas
+
+
+def is_performance_record(record: dict[str, Any]) -> bool:
+    """Return whether a sample record is a performance measurement."""
+    kind = str(record.get("kind", record.get("record_type", ""))).lower()
+    return kind in PERFORMANCE_KINDS or record.get("performance") is True
+
+
+def is_vendor_baseline(record: dict[str, Any]) -> bool:
+    """Return whether a performance record is a vendor baseline."""
+    kind = str(record.get("kind", record.get("record_type", ""))).lower()
+    role = str(record.get("role", "")).lower()
+    return kind == "vendor_baseline" or role == "vendor_baseline" or record.get("baseline") is True
+
+
+def positive_number(value: Any) -> float | None:
+    """Return a positive finite float, or None."""
+    if isinstance(value, bool):
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(number) or number <= 0:
+        return None
+    return number
+
+
+def check_performance_records(
+    requirement: dict[str, Any],
+    samples: list[dict[str, Any]],
+    findings: Findings,
+) -> None:
+    """Enforce benchmark-evidence integrity for every performance record."""
+    requirement_id = str(requirement.get("id", "<unnamed>"))
+    for record in samples:
+        if not is_performance_record(record):
+            continue
+        label = f"{requirement_id}: performance record in {record.get('_file')}"
+        if str(record.get("host_origin", "")).lower() == "terok_container":
+            findings.add(
+                "forbidden-evidence-origin",
+                f"{label} was produced inside the terok container; use a computeMCP target",
+            )
+
+        samples_count = record.get("samples")
+        if isinstance(samples_count, bool) or not isinstance(samples_count, int) or samples_count < 10:
+            findings.add("performance-samples", f"{label} needs samples >= 10, got {samples_count!r}")
+        rounds = record.get("rounds")
+        if isinstance(rounds, bool) or not isinstance(rounds, int) or rounds < 3:
+            findings.add("performance-rounds", f"{label} needs rounds >= 3, got {rounds!r}")
+        median_ns = positive_number(record.get("median_ns"))
+        if median_ns is None:
+            findings.add("performance-median", f"{label} needs median_ns > 0")
+
+        for key in ("host", "device"):
+            if not isinstance(record.get(key), str) or not str(record.get(key)).strip():
+                findings.add("performance-identity", f"{label} needs a non-empty {key} identity")
+        tools = record.get("tools")
+        if not isinstance(tools, dict):
+            findings.add("performance-tools", f"{label} needs a tools block")
+        else:
+            for key in ("compiler", "toolkit", "driver"):
+                value = tools.get(key)
+                if not isinstance(value, str) or not value.strip():
+                    findings.add("performance-tools", f"{label} tools.{key} must be a non-empty string")
+
+        load = record.get("load")
+        governor = record.get("governor")
+        if not isinstance(load, str) or not load.strip():
+            findings.add("performance-environment", f"{label} needs a stated load")
+        if not isinstance(governor, str) or not governor.strip():
+            findings.add("performance-environment", f"{label} needs a stated governor")
+        threads = record.get("threads", record.get("thread_count"))
+        if isinstance(threads, bool) or not isinstance(threads, int) or threads < 1:
+            findings.add("performance-environment", f"{label} needs a positive thread count")
+
+        dimensions: dict[str, int] = {}
+        for key in ("m", "n", "k"):
+            value = record.get(key)
+            if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+                findings.add("performance-shape", f"{label} needs positive integer {key}")
+            else:
+                dimensions[key] = value
+        if median_ns is None or len(dimensions) != 3:
+            continue
+        expected_gflops = 2.0 * dimensions["m"] * dimensions["n"] * dimensions["k"] / median_ns
+        measured = positive_number(record.get("gflops"))
+        if measured is None:
+            findings.add("performance-gflops", f"{label} needs a positive gflops value")
+        elif abs(measured - expected_gflops) / expected_gflops > GFLOPS_TOLERANCE:
+            findings.add(
+                "performance-gflops",
+                f"{label} gflops={measured} disagrees with 2*M*N*K/median_ns={expected_gflops:.6f}",
+            )
+
+
+def vendor_gate(requirement: dict[str, Any]) -> bool:
+    """Return whether a requirement compares against a vendor baseline."""
+    requirement_id = str(requirement.get("id", ""))
+    return requirement.get("vendor_baseline") is True or requirement_id.startswith(("G5", "G6"))
+
+
+def baseline_key(record: dict[str, Any]) -> tuple[Any, ...]:
+    """Return the shape/layout/mode/resource identity used to pair a baseline."""
+
+    def flag(name: str) -> bool:
+        return bool(record.get(name, False))
+
+    return (
+        record.get("m"),
+        record.get("n"),
+        record.get("k"),
+        str(record.get("layout", "")),
+        flag("transpose_a"),
+        flag("transpose_b"),
+        str(record.get("mode", "")),
+        str(record.get("target", "")),
+        str(record.get("device", "")).strip().lower(),
+    )
+
+
+def geometric_mean(values: list[float]) -> float:
+    """Return the geometric mean of positive values."""
+    return math.exp(sum(math.log(value) for value in values) / len(values))
+
+
+def check_vendor_baseline(
+    requirement: dict[str, Any],
+    entry: dict[str, Any],
+    samples: list[dict[str, Any]],
+    findings: Findings,
+) -> dict[str, Any]:
+    """Pair candidate records with vendor baselines and compute ratios."""
+    requirement_id = str(requirement.get("id", "<unnamed>"))
+    metrics = dict(entry.get("metrics", {})) if isinstance(entry.get("metrics"), dict) else {}
+    if not vendor_gate(requirement):
+        return metrics
+    for metric in list(metrics):
+        if "vendor_ratio" in str(metric):
+            metrics.pop(metric)
+
+    candidates = [
+        record
+        for record in samples
+        if is_performance_record(record)
+        and not is_vendor_baseline(record)
+        and sample_status(record) in PASSING_STATUSES
+    ]
+    baselines: dict[tuple[Any, ...], list[dict[str, Any]]] = {}
+    for record in samples:
+        if is_vendor_baseline(record) and sample_status(record) in PASSING_STATUSES:
+            baselines.setdefault(baseline_key(record), []).append(record)
+
+    ratios: list[float] = []
+    for record in candidates:
+        key = baseline_key(record)
+        matches = baselines.get(key, [])
+        case = record.get("case_id", "<unknown>")
+        if not matches:
+            findings.add(
+                "vendor-unavailable",
+                f"{requirement_id}: no matched vendor baseline for case {case} on "
+                f"target {record.get('target')} mode {record.get('mode')}",
+            )
+            continue
+        baseline = matches[0]
+        candidate_gflops = positive_number(record.get("gflops"))
+        baseline_gflops = positive_number(baseline.get("gflops"))
+        if candidate_gflops is None or baseline_gflops is None:
+            findings.add(
+                "vendor-unavailable",
+                f"{requirement_id}: cannot compute a vendor ratio for case {case} without positive gflops",
+            )
+            continue
+        ratios.append(candidate_gflops / baseline_gflops)
+
+    if not candidates:
+        findings.add(
+            "vendor-unavailable",
+            f"{requirement_id}: vendor gate has no passing performance records to compare",
+        )
+
+    if ratios:
+        computed = {"geomean": geometric_mean(ratios), "min": min(ratios)}
+        for threshold in as_list(requirement.get("thresholds")):
+            if not isinstance(threshold, dict):
+                continue
+            metric = str(threshold.get("metric", ""))
+            if "vendor_ratio" not in metric:
+                continue
+            if "geomean" in metric:
+                metrics[metric] = computed["geomean"]
+            elif "min" in metric or "case" in metric:
+                metrics[metric] = computed["min"]
+    return metrics
+
+
+def check_sample_shas(
+    requirement_id: str,
+    samples: list[dict[str, Any]],
+    head_sha: str,
+    repo: Path,
+    last_include: str,
+    findings: Findings,
+) -> list[str]:
+    """Check that every sample carries a valid, fresh source SHA."""
+    shas: list[str] = []
+    for record in samples:
+        sha = check_evidence_sha(
+            requirement_id,
+            f"sample in {record.get('_file')}",
+            record.get("source_sha"),
+            head_sha,
+            repo,
+            last_include,
+            findings,
+            "stale-sample-sha",
+        )
+        if sha:
+            shas.append(sha)
+    return shas
+
+
+def check_mixed_shas(
+    requirement: dict[str, Any],
+    shas: list[str],
+    findings: Findings,
+) -> None:
+    """Reject multiple evidence SHAs in one requirement unless allowed."""
+    unique = {sha for sha in shas if sha}
+    if len(unique) <= 1:
+        return
+    if requirement.get("allow_mixed_shas") is True:
+        return
+    requirement_id = str(requirement.get("id", "<unnamed>"))
+    findings.add(
+        "mixed-shas",
+        f"{requirement_id}: evidence mixes source SHAs {sorted(unique)}; "
+        "set allow_mixed_shas: true only when explicitly justified",
+    )
+
+
+def check_entry_status(requirement_id: str, entry: dict[str, Any], findings: Findings) -> None:
+    """Check the entry status and its skip approvals."""
+    status = str(entry.get("status", "")).lower()
+    if status in SKIPPED_STATUSES:
+        if entry.get("approved") is not True:
+            findings.add("unapproved-skip", f"{requirement_id}: requirement entry is skipped without approval")
+    elif status not in PASSING_STATUSES:
+        findings.add(
+            "not-passing",
+            f"{requirement_id}: acceptance status is {status or '<missing>'}, expected a passing status",
+        )
+
+    for skip in as_list(entry.get("skips")):
+        if isinstance(skip, dict) and skip.get("approved") is not True:
+            findings.add(
+                "unapproved-skip",
+                f"{requirement_id}: skip for target {skip.get('target')!r} is not approved",
+            )
+
+
+def check_requirement(
+    requirement: dict[str, Any],
+    acceptance: dict[str, Any],
+    run_root: Path,
+    head_sha: str,
+    repo: Path,
+    last_include: str,
+    findings: Findings,
+) -> None:
+    """Run every acceptance check for one required requirement."""
+    requirement_id = str(requirement.get("id", ""))
+    if not requirement_id:
+        findings.add("invalid-requirement", "requirement without an id")
+        return
+    if not is_required(requirement):
+        return
+
+    entry = collect_entries(acceptance).get(requirement_id)
+    if entry is None:
+        findings.add("missing-entry", f"{requirement_id}: no acceptance entry")
+        return
+
+    shas: list[str] = []
+    entry_sha = check_evidence_sha(
+        requirement_id,
+        "acceptance entry",
+        entry.get("source_sha"),
+        head_sha,
+        repo,
+        last_include,
+        findings,
+        "stale-entry-sha",
+    )
+    if entry_sha:
+        shas.append(entry_sha)
+
+    check_entry_status(requirement_id, entry, findings)
+    check_substitutions(requirement, entry, as_list(acceptance.get("substitutions")), findings)
+    check_review(requirement, entry, findings)
+
+    samples, sample_findings = collect_samples(run_root, entry)
+    findings.extend(sample_findings)
+    shas.extend(check_sample_shas(requirement_id, samples, head_sha, repo, last_include, findings))
+    shas.extend(check_target_matrix(requirement, entry, run_root, head_sha, repo, last_include, findings))
+    check_mixed_shas(requirement, shas, findings)
+
+    check_performance_records(requirement, samples, findings)
+    effective_entry = dict(entry)
+    effective_entry["metrics"] = check_vendor_baseline(requirement, entry, samples, findings)
+    check_thresholds(requirement, effective_entry, findings)
+    check_coverage(requirement, entry, samples, findings)
+
+
+def summarize_requirement(requirement: dict[str, Any], findings: Findings) -> dict[str, Any]:
+    """Build the per-requirement human and machine-readable summary."""
+    categories = findings.categories()
+    if not is_required(requirement):
+        status = "not_required"
+    elif not findings:
+        status = "passed"
+    elif "vendor-unavailable" in categories:
+        status = "vendor_unavailable"
+    elif "target-not-run" in categories:
+        status = "not_run"
+    elif "target-not-passed" in categories or "target-failed" in categories:
+        status = "failed"
+    elif categories & STALE_CATEGORIES:
+        status = "stale"
+    elif categories & THRESHOLD_CATEGORIES:
+        status = "failed_threshold"
+    elif categories & SKIP_CATEGORIES:
+        status = "skipped_unapproved"
+    elif categories & SCHEMA_CATEGORIES:
+        status = "invalid"
+    else:
+        status = "missing_evidence"
+
+    missing_evidence = [
+        item["message"]
+        for item in findings.items
+        if item["category"] not in SCHEMA_CATEGORIES | STALE_CATEGORIES | THRESHOLD_CATEGORIES | SKIP_CATEGORIES
+    ]
+    return {
+        "id": str(requirement.get("id", "<unnamed>")),
+        "status": status,
+        "missing_evidence": missing_evidence,
+        "reason": "; ".join(item["message"] for item in findings.items),
+        "findings": list(findings.items),
+    }
+
+
+def findings_exit_code(findings: Findings) -> int:
+    """Map the collected findings to the CI failure class."""
+    if not findings:
+        return 0
+    categories = findings.categories()
+    if categories & SCHEMA_CATEGORIES:
+        return EXIT_SCHEMA
+    if categories & STALE_CATEGORIES:
+        return EXIT_STALE
+    if categories & THRESHOLD_CATEGORIES:
+        return EXIT_THRESHOLD
+    if categories & SKIP_CATEGORIES:
+        return EXIT_SKIP
+    return EXIT_MISSING
+
+
 def parse_arguments(argv: list[str] | None) -> argparse.Namespace:
     """Parse the command line arguments."""
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--requirements", required=True, type=Path)
     parser.add_argument("--run-root", required=True, type=Path)
     parser.add_argument("--head-sha", default=None)
+    parser.add_argument("--repo", type=Path, default=None, help="source checkout used for SHA ancestry checks")
     parser.add_argument("--acceptance", type=Path, default=None, help="override acceptance.json path")
     parser.add_argument("--json-report", type=Path, default=None)
     parser.add_argument("--allow-run-root-inside-repo", action="store_true")
@@ -464,6 +1113,19 @@ def resolve_run_root(args: argparse.Namespace) -> Path | None:
         )
         return None
     return run_root
+
+
+def resolve_repo(args: argparse.Namespace, findings: Findings) -> Path | None:
+    """Resolve the source repository used for ancestry checks."""
+    repo = (args.repo or CHECKOUT_ROOT).resolve()
+    if not repo.is_dir():
+        findings.add("invalid-repository", f"source repository does not exist: {repo}")
+        return None
+    result = run_git(repo, ["rev-parse", "--git-dir"])
+    if result.returncode != 0:
+        findings.add("invalid-repository", f"not a git repository: {repo}")
+        return None
+    return repo
 
 
 def resolve_head_sha(args: argparse.Namespace, document: Any, findings: Findings) -> str:
@@ -518,89 +1180,13 @@ def collect_entries(acceptance: dict[str, Any]) -> dict[str, dict[str, Any]]:
     return entries
 
 
-def check_entry_status(requirement_id: str, entry: dict[str, Any], findings: Findings) -> None:
-    """Check the entry status and its skip approvals."""
-    status = str(entry.get("status", "")).lower()
-    if status in SKIPPED_STATUSES:
-        if entry.get("approved") is not True:
-            findings.add("unapproved-skip", f"{requirement_id}: requirement entry is skipped without approval")
-    elif status not in PASSING_STATUSES:
-        findings.add(
-            "not-passing",
-            f"{requirement_id}: acceptance status is {status or '<missing>'}, expected a passing status",
-        )
-
-    for skip in as_list(entry.get("skips")):
-        if isinstance(skip, dict) and skip.get("approved") is not True:
-            findings.add(
-                "unapproved-skip",
-                f"{requirement_id}: skip for target {skip.get('target')!r} is not approved",
-            )
-
-
-def check_sample_shas(
-    requirement_id: str,
-    samples: list[dict[str, Any]],
-    head_sha: str,
-    findings: Findings,
-) -> None:
-    """Check that every sample carries the head SHA."""
-    for record in samples:
-        record_sha = record.get("source_sha")
-        if record_sha is None:
-            findings.add(
-                "missing-sample-sha",
-                f"{requirement_id}: sample in {record.get('_file')} has no source SHA",
-            )
-        elif head_sha and not sha_matches(record_sha, head_sha):
-            findings.add(
-                "stale-sample-sha",
-                f"{requirement_id}: sample in {record.get('_file')} has stale SHA {record_sha!r}",
-            )
-
-
-def check_requirement(
-    requirement: dict[str, Any],
-    acceptance: dict[str, Any],
-    run_root: Path,
-    head_sha: str,
-    findings: Findings,
-) -> None:
-    """Run every acceptance check for one required requirement."""
-    requirement_id = str(requirement.get("id", ""))
-    if not requirement_id:
-        findings.add("invalid-requirement", "requirement without an id")
-        return
-    if not is_required(requirement):
-        return
-
-    entry = collect_entries(acceptance).get(requirement_id)
-    if entry is None:
-        findings.add("missing-entry", f"{requirement_id}: no acceptance entry")
-        return
-
-    if head_sha and entry.get("source_sha") is not None and not sha_matches(entry.get("source_sha"), head_sha):
-        findings.add(
-            "stale-entry-sha",
-            f"{requirement_id}: entry source_sha {entry.get('source_sha')!r} does not match head {head_sha}",
-        )
-
-    check_entry_status(requirement_id, entry, findings)
-    check_substitutions(requirement, entry, as_list(acceptance.get("substitutions")), findings)
-    check_review(requirement, entry, findings)
-    check_thresholds(requirement, entry, findings)
-
-    samples, sample_findings = collect_samples(run_root, entry)
-    findings.extend(sample_findings)
-    check_sample_shas(requirement_id, samples, head_sha, findings)
-    check_coverage(requirement, entry, samples, findings)
-
-
 def build_report(
     head_sha: str,
     run_root: Path,
     requirements: list[dict[str, Any]],
     findings: Findings,
+    requirement_reports: list[dict[str, Any]],
+    exit_code: int,
 ) -> dict[str, Any]:
     """Assemble the JSON-serializable acceptance report."""
     return {
@@ -609,21 +1195,30 @@ def build_report(
         "run_root": str(run_root),
         "requirements": len(requirements),
         "passed": not findings,
+        "exit_code": exit_code,
+        "requirement_reports": requirement_reports,
         "findings": findings.items,
     }
 
 
 def emit_report(report: dict[str, Any], args: argparse.Namespace, findings: Findings) -> int:
     """Write the optional JSON report and print the final verdict."""
+    exit_code = int(report["exit_code"])
     if args.json_report is not None:
         args.json_report.parent.mkdir(parents=True, exist_ok=True)
         args.json_report.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
 
     if findings:
-        print(f"acceptance FAILED with {len(findings.items)} finding(s):", file=sys.stderr)
+        print(f"acceptance FAILED with {len(findings.items)} finding(s), exit {exit_code}:", file=sys.stderr)
+        for summary in report["requirement_reports"]:
+            print(f"  {summary['id']}: {summary['status']}", file=sys.stderr)
+            if summary["missing_evidence"]:
+                print(f"    missing evidence: {'; '.join(summary['missing_evidence'])}", file=sys.stderr)
+            if summary["reason"]:
+                print(f"    reason: {summary['reason']}", file=sys.stderr)
         for finding in findings.items:
             print(f"  [{finding['category']}] {finding['message']}", file=sys.stderr)
-        return 1
+        return exit_code
     print(f"acceptance PASSED for head {report['head_sha']} ({report['requirements']} requirement(s))")
     return 0
 
@@ -635,29 +1230,56 @@ def main(argv: list[str] | None = None) -> int:
 
     run_root = resolve_run_root(args)
     if run_root is None:
-        return 2
+        return EXIT_SCHEMA
 
     if not args.requirements.is_file():
         print(f"check_acceptance: requirements file does not exist: {args.requirements}", file=sys.stderr)
-        return 2
+        return EXIT_SCHEMA
 
     document = load_yaml(args.requirements)
     requirements = requirement_list(document)
     head_sha = resolve_head_sha(args, document, findings)
     apply_defaults(document, requirements)
 
+    repo = resolve_repo(args, findings)
+    last_include = ""
+    if repo is not None and head_sha:
+        if not sha_exists(repo, head_sha):
+            findings.add("invalid-head-sha", f"head SHA {head_sha!r} is unknown to {repo}")
+        else:
+            last_include = last_include_change(repo, head_sha)
+
     acceptance_path = args.acceptance or (run_root / "acceptance.json")
     acceptance = load_acceptance(acceptance_path, findings)
-    if acceptance and head_sha and not sha_matches(acceptance.get("source_sha"), head_sha):
-        findings.add(
+    if acceptance and head_sha and repo is not None:
+        check_evidence_sha(
+            "acceptance",
+            "acceptance document",
+            acceptance.get("source_sha"),
+            head_sha,
+            repo,
+            last_include,
+            findings,
             "stale-acceptance-sha",
-            f"acceptance source_sha {acceptance.get('source_sha')!r} does not match head {head_sha}",
         )
 
+    requirement_reports: list[dict[str, Any]] = []
     for requirement in requirements:
-        check_requirement(requirement, acceptance, run_root, head_sha, findings)
+        requirement_findings = Findings()
+        check_requirement(
+            requirement,
+            acceptance,
+            run_root,
+            head_sha,
+            repo if repo is not None else CHECKOUT_ROOT,
+            last_include,
+            requirement_findings,
+        )
+        findings.extend(requirement_findings)
+        requirement_reports.append(summarize_requirement(requirement, requirement_findings))
 
-    report = build_report(head_sha, run_root, requirements, findings)
+    exit_code = findings_exit_code(findings)
+    report = build_report(head_sha, run_root, requirements, findings, requirement_reports, exit_code)
     return emit_report(report, args, findings)
 
 
