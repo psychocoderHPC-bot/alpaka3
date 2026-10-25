@@ -32,10 +32,12 @@ target_compile_definitions(
 )
 
 option(GEMM_BENCH_WERROR "Treat warnings in the GEMM benchmark harness as errors." OFF)
+# Host warning flags must not reach nvcc: nvcc's -Werror takes a warning list and
+# rejects the following CUDA option when these flags are used for CUDA sources.
 if(alpaka_COMPILE_PEDANTIC OR GEMM_BENCH_WERROR)
-    target_compile_options(gemm_bench PRIVATE -Wall -Wextra -Wpedantic -Werror)
+    target_compile_options(gemm_bench PRIVATE "$<$<COMPILE_LANGUAGE:CXX>:-Wall;-Wextra;-Wpedantic;-Werror>")
 else()
-    target_compile_options(gemm_bench PRIVATE -Wall -Wextra -Wpedantic)
+    target_compile_options(gemm_bench PRIVATE "$<$<COMPILE_LANGUAGE:CXX>:-Wall;-Wextra;-Wpedantic>")
 endif()
 
 set_target_properties(gemm_bench PROPERTIES FOLDER benchmarks/gemm)

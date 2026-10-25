@@ -18,7 +18,6 @@ using namespace alpaka;
 
 namespace
 {
-    constexpr uint16_t exponentMask = 0x1fu;
     constexpr uint16_t mantissaMask = 0x3ffu;
 
     uint16_t expectedNaNBits(float const value)

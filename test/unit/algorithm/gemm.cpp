@@ -908,8 +908,8 @@ TEMPLATE_LIST_TEST_CASE(
 
     auto const runMode = [&]<typename Storage>(NumericMode mode, onHost::GemmNumericMode hostMode, char const* label)
     {
-        long double worstScaled = 0.0L;
-        long double worstQuantization = 0.0L;
+        double worstScaled = 0.0;
+        double worstQuantization = 0.0;
         std::uint64_t seed = 0x16u;
         for(std::size_t m = 0u; m <= 7u; ++m)
             for(std::size_t n = 0u; n <= 7u; ++n)
@@ -931,9 +931,12 @@ TEMPLATE_LIST_TEST_CASE(
                         seed++);
                     if(m != 0u && n != 0u)
                     {
-                        worstScaled = std::max(worstScaled, report.accumulation.maxScaledError);
+                        worstScaled
+                            = std::max<double>(worstScaled, static_cast<double>(report.accumulation.maxScaledError));
                         if(k != 0u)
-                            worstQuantization = std::max(worstQuantization, report.quantization.maxAbsError);
+                            worstQuantization = std::max<double>(
+                                worstQuantization,
+                                static_cast<double>(report.quantization.maxAbsError));
                     }
                 }
         std::cout << "[" << label << "] worst scaled error " << static_cast<double>(worstScaled)
@@ -967,8 +970,8 @@ TEMPLATE_LIST_TEST_CASE(
 
     auto const runMode = [&]<typename Storage>(NumericMode mode, onHost::GemmNumericMode hostMode, char const* label)
     {
-        long double worstScaled = 0.0L;
-        long double worstQuantization = 0.0L;
+        double worstScaled = 0.0;
+        double worstQuantization = 0.0;
         std::uint64_t seed = 0x5a5au;
         for(auto const& shape : shapes)
             for(int layout = 0; layout < 2; ++layout)
@@ -994,9 +997,13 @@ TEMPLATE_LIST_TEST_CASE(
                             seed++);
                         if(shape.m != 0u && shape.n != 0u)
                         {
-                            worstScaled = std::max(worstScaled, report.accumulation.maxScaledError);
+                            worstScaled = std::max<double>(
+                                worstScaled,
+                                static_cast<double>(report.accumulation.maxScaledError));
                             if(shape.k != 0u)
-                                worstQuantization = std::max(worstQuantization, report.quantization.maxAbsError);
+                                worstQuantization = std::max<double>(
+                                    worstQuantization,
+                                    static_cast<double>(report.quantization.maxAbsError));
                         }
                     }
         std::cout << "[" << label << "] adversarial worst scaled error " << static_cast<double>(worstScaled)
