@@ -14,6 +14,7 @@ namespace alpaka::onHost
      * The operation follows the queue's asynchronous semantics: the call only enqueues work and returns. The caller
      * keeps the view storage alive until the queue has completed the operation.
      *
+     * @tparam T_Executor executor type, constrained by @ref alpaka::concepts::Executor
      * @tparam T_Queue queue type
      * @param queue queue the work is enqueued on
      * @param exec executor used for the launch, @ref alpaka::exec::anyExecutor selects the default executor of the
@@ -34,10 +35,17 @@ namespace alpaka::onHost
      *
      * @{
      */
-    template<typename T_Queue, typename T_C, typename T_A, typename T_B, typename T_Alpha, typename T_Beta>
+    template<
+        alpaka::concepts::Executor T_Executor,
+        typename T_Queue,
+        typename T_C,
+        typename T_A,
+        typename T_B,
+        typename T_Alpha,
+        typename T_Beta>
     inline void gemm(
         T_Queue const& queue,
-        alpaka::concepts::Executor auto const exec,
+        T_Executor const exec,
         GemmView<T_C> c,
         GemmView<T_A> a,
         GemmView<T_B> b,
