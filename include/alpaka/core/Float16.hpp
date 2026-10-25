@@ -15,7 +15,7 @@
  *
  * Both types are storage and transport formats. Convert them to `float` for arithmetic and convert the result back
  * with `fromFloat()`. Narrowing results from `fromFloat()` use round to nearest, ties to even. The conversion is
- * implemented with integer arithmetic and must not depend on backend specific instructions.
+ * written in portable C++ and must not depend on backend specific instructions.
  */
 
 namespace alpaka
@@ -123,31 +123,40 @@ namespace alpaka
             constexpr uint32_t maxExponentField = (uint32_t{1u} << T_numExponentBits) - 1u;
             constexpr uint32_t exponentBias = maxExponentField >> 1u;
 
-            uint32_t const signBit = uint32_t(bits & 0x8000u) << 16u;
-            uint32_t const exponent = (uint32_t(bits) >> T_numMantissaBits) & maxExponentField;
-            uint32_t const mantissa = uint32_t(bits) & mantissaMask;
-
-            if(exponent == maxExponentField)
-                return signBit | 0x7f80'0000u | (mantissa << (23u - T_numMantissaBits));
             if constexpr(exponentBias == 127u)
             {
-                // exponent range and subnormal range are identical to binary32, the value is a prefix of binary32
-                return signBit | (exponent << 23u) | (mantissa << (23u - T_numMantissaBits));
+                /* Exponent and subnormal range are identical to binary32, so the value is the bit pattern shifted
+                 * into place. This covers normals, subnormals, signed zero, infinity and NaN without branches.
+                 */
+                return uint32_t{bits} << 16u;
             }
             else
             {
-                if(exponent == 0u)
-                {
-                    if(mantissa == 0u)
-                        return signBit;
-                    // normalize the subnormal value, all subnormals are in the range of binary32 normal values
-                    uint32_t msb = T_numMantissaBits - 1u;
-                    while(((mantissa >> msb) & 1u) == 0u)
-                        --msb;
-                    uint32_t const exponentField = msb + 1u - exponentBias - T_numMantissaBits + 127u;
-                    return signBit | (exponentField << 23u) | ((mantissa << (23u - msb)) & 0x7f'ffffu);
-                }
-                return signBit | ((exponent - exponentBias + 127u) << 23u) | (mantissa << (23u - T_numMantissaBits));
+                constexpr uint32_t exponentShift = 23u - T_numMantissaBits;
+                constexpr uint32_t normalExponentOffset = 127u - exponentBias;
+                constexpr uint32_t floatMaxExponentField = 0xffu;
+                /* 2^(1 - exponentBias - mantissaBits): a subnormal value is mantissa times this exact power of
+                 * two. Scaling by it yields the normalized binary32 pattern without a variable shift.
+                 */
+                constexpr float subnormalScale
+                    = std::bit_cast<float>(uint32_t(127u - (exponentBias + T_numMantissaBits - 1u)) << 23u);
+
+                uint32_t const signBit = uint32_t(bits & 0x8000u) << 16u;
+                uint32_t const exponent = (uint32_t(bits) >> T_numMantissaBits) & maxExponentField;
+                uint32_t const mantissa = uint32_t(bits) & mantissaMask;
+
+                /* Normal, infinity and NaN differ only in the exponent field. The multiplication and the
+                 * masked selection below are branch free so the compiler can widen a whole row as one vector.
+                 */
+                uint32_t const normalBits
+                    = signBit
+                      | ((exponent == maxExponentField ? floatMaxExponentField : exponent + normalExponentOffset)
+                         << 23u)
+                      | (mantissa << exponentShift);
+                uint32_t const subnormalBits
+                    = signBit | std::bit_cast<uint32_t>(static_cast<float>(mantissa) * subnormalScale);
+                uint32_t const subnormalMask = uint32_t{0u} - uint32_t(exponent == 0u);
+                return (normalBits & ~subnormalMask) | (subnormalBits & subnormalMask);
             }
         }
     } // namespace internal
