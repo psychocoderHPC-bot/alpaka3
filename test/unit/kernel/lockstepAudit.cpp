@@ -201,6 +201,9 @@ TEST_CASE("lockstep audit compile-time invariants", "[kernel][lockstep][audit]")
     // --- BindValueType_t is well-formed for an ordinary data argument, a local variable, and a mapped argument ---
     int32_t storage[4]{};
     auto dataSource = makeMdSpan(storage, Vec{4u});
+    // Touch the view: the remaining uses are type-only, which nvcc's flow analysis treats as set-but-not-used.
+    dataSource[0u] = int32_t{17};
+    CHECK(storage[0u] == int32_t{17});
     using DataSource = ALPAKA_TYPEOF(dataSource);
     using LockstepVar = onAcc::internal::LockstepVar<int32_t, CVec<uint32_t, 8u>, CVec<uint32_t, 4u>>;
 
