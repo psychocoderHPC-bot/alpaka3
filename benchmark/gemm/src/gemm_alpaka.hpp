@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 //
-// M2 CPU adapter for the benchmark harness: times the real common-source GEMM
-// kernel instead of the M0 placeholder.
+// Alpaka adapter for the benchmark harness: times the real common-source GEMM
+// kernel on a device chosen at run time. The default remains the host CPU.
 
 #pragma once
 
@@ -10,10 +10,12 @@
 #include <alpaka/alpaka.hpp>
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <concepts>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -24,6 +26,18 @@
 
 namespace gemm::bench
 {
+    /** Device and executor requested on the command line.
+     *
+     * An empty executor selects the device's default executor, matching the
+     * pre-selection behaviour of the harness. A non-empty value must name an
+     * executor that is compiled in and supported by the selected device.
+     */
+    struct DeviceRequest
+    {
+        std::string deviceKind{"cpu"};
+        std::string executor{};
+    };
+
     namespace detail
     {
         template<typename T>
@@ -34,34 +48,82 @@ namespace gemm::bench
             else
                 return T::fromFloat(value);
         }
+
+        [[nodiscard]] inline std::string toLower(std::string_view text)
+        {
+            std::string result{text};
+            std::transform(
+                result.begin(),
+                result.end(),
+                result.begin(),
+                [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+            return result;
+        }
+
+        [[nodiscard]] inline bool equalsIgnoreCase(std::string_view lhs, std::string_view rhs)
+        {
+            return toLower(lhs) == toLower(rhs);
+        }
+
+        /** True when the executor is usable with the concrete device type. */
+        template<typename T_Device, typename T_Executor>
+        inline constexpr bool executorIsSupported
+            = alpaka::onHost::trait::IsExecutorSupportedBy::Op<T_Executor, typename T_Device::element_type>::value;
     } // namespace detail
 
-    /** Alpaka host-CPU GEMM functor.
+    /** Alpaka GEMM functor templated on the concrete device and executor.
      *
-     * The functor owns one device, queue and the matrix buffers of the active numerical mode. prepare() allocates
-     * and seeds them for a problem; run() only enqueues the real kernel, so the harness measures queue latency plus
+     * The functor owns the device, queue and the matrix buffers of the active
+     * numerical mode. prepare() allocates and seeds them for a problem; run()
+     * only enqueues the real kernel, so the harness measures queue latency plus
      * device work rather than allocation or host packing.
      *
-     * Strict FP32, FP16-to-FP32 and BF16-to-FP32 are supported. The mixed modes keep A and B in their 16-bit
-     * storage type and C in FP32; the common kernel performs the exact conversion. FP64 is not exposed by this M2
-     * adapter.
+     * Strict FP32, FP16-to-FP32 and BF16-to-FP32 are supported. The mixed modes
+     * keep A and B in their 16-bit storage type and C in FP32; the common kernel
+     * performs the exact conversion. FP64 is not exposed by this adapter.
      */
+    template<typename T_Device, typename T_Executor>
     class AlpakaGemmFunctor final : public GemmFunctor
     {
     public:
-        using Device = decltype(alpaka::onHost::makeHostDevice<float>());
-        using Executor = decltype(alpaka::onHost::defaultExecutor(std::declval<Device>()));
+        using Device = T_Device;
+        using Executor = T_Executor;
 
-        AlpakaGemmFunctor()
-            : m_device{alpaka::onHost::makeHostDevice<float>()}
-            , m_exec{alpaka::onHost::defaultExecutor(m_device)}
+        AlpakaGemmFunctor(Device device, Executor exec)
+            : m_device{std::move(device)}
+            , m_exec{exec}
             , m_queue{m_device.makeQueue()}
+            , m_deviceName{m_device.getName()}
+            , m_apiName{m_device.getApi().getName()}
+            , m_deviceKindName{m_device.getDeviceKind().getName()}
+            , m_executorName{Executor::getName()}
+            , m_adapterName{"alpaka-" + detail::toLower(m_deviceKindName) + "-" + detail::toLower(m_executorName)}
         {
         }
 
         [[nodiscard]] std::string_view name() const override
         {
-            return "alpaka-host-cpu-m2";
+            return m_adapterName;
+        }
+
+        [[nodiscard]] std::string_view deviceName() const override
+        {
+            return m_deviceName;
+        }
+
+        [[nodiscard]] std::string_view api() const override
+        {
+            return m_apiName;
+        }
+
+        [[nodiscard]] std::string_view deviceKind() const override
+        {
+            return m_deviceKindName;
+        }
+
+        [[nodiscard]] std::string_view executorName() const override
+        {
+            return m_executorName;
         }
 
         [[nodiscard]] bool supports(Problem const& problem) const override
@@ -71,7 +133,7 @@ namespace gemm::bench
 
         [[nodiscard]] std::string unsupportedReason(Problem const& problem) const override
         {
-            return "M2 alpaka adapter supports fp32, fp16_fp32 and bf16_fp32, requested " + problem.mode;
+            return "alpaka adapter supports fp32, fp16_fp32 and bf16_fp32, requested " + problem.mode;
         }
 
         void prepare(Problem const& problem) override
@@ -231,6 +293,11 @@ namespace gemm::bench
         Device m_device;
         Executor m_exec;
         decltype(m_device.makeQueue()) m_queue;
+        std::string m_deviceName;
+        std::string m_apiName;
+        std::string m_deviceKindName;
+        std::string m_executorName;
+        std::string m_adapterName;
         std::size_t m_lda{};
         std::size_t m_ldb{};
         std::size_t m_ldc{};
@@ -242,4 +309,146 @@ namespace gemm::bench
         std::optional<Buffers<alpaka::Float16, float>> m_f16;
         std::optional<Buffers<alpaka::BFloat16, float>> m_bf16;
     };
+
+    namespace detail
+    {
+        [[nodiscard]] inline std::string supportedExecutorNames()
+        {
+            std::string names;
+            auto append = [&](auto exec)
+            {
+                if(!names.empty())
+                    names += ", ";
+                names += std::decay_t<decltype(exec)>::getName();
+            };
+            std::apply([&](auto... exec) { (append(exec), ...); }, alpaka::exec::enabledExecutors);
+            return names;
+        }
+
+        template<typename T_Device>
+        [[nodiscard]] std::unique_ptr<GemmFunctor> makeFunctorWithExecutor(
+            T_Device device,
+            DeviceRequest const& request,
+            std::string_view requestedKind)
+        {
+            std::string available;
+            std::unique_ptr<GemmFunctor> functor;
+            auto tryExecutor = [&](auto exec)
+            {
+                using Executor = std::decay_t<decltype(exec)>;
+                if constexpr(executorIsSupported<T_Device, Executor>)
+                {
+                    if(!available.empty())
+                        available += ", ";
+                    available += Executor::getName();
+                    if(functor)
+                        return;
+                    if(!request.executor.empty() && !equalsIgnoreCase(request.executor, Executor::getName()))
+                        return;
+                    functor = std::make_unique<AlpakaGemmFunctor<T_Device, Executor>>(std::move(device), exec);
+                }
+            };
+            std::apply([&](auto... exec) { (tryExecutor(exec), ...); }, alpaka::exec::enabledExecutors);
+
+            if(!functor)
+            {
+                if(request.executor.empty())
+                    throw std::runtime_error(
+                        "no enabled executor is supported by device kind '" + std::string{requestedKind} + "'");
+                throw std::runtime_error(
+                    "executor '" + request.executor + "' is not available for device kind '"
+                    + std::string{requestedKind} + "'; supported executors: " + available);
+            }
+            return functor;
+        }
+
+        template<typename T_Api, typename T_Kind>
+        inline constexpr bool deviceSpecIsValid = alpaka::onHost::DeviceSpec<T_Api, T_Kind>::isValid();
+
+        template<typename T_Api, typename T_Kind>
+        [[nodiscard]] bool deviceIsAvailable()
+        {
+            if constexpr(deviceSpecIsValid<T_Api, T_Kind>)
+            {
+                auto selector
+                    = alpaka::onHost::makeDeviceSelector(alpaka::onHost::DeviceSpec<T_Api, T_Kind>{T_Api{}, T_Kind{}});
+                return selector.isAvailable();
+            }
+            else
+            {
+                return false;
+            }
+        }
+
+        template<typename T_Api, typename T_Kind>
+        [[nodiscard]] std::unique_ptr<GemmFunctor> makeFunctorForSpec(
+            DeviceRequest const& request,
+            std::string_view requestedKind)
+        {
+            if constexpr(!deviceSpecIsValid<T_Api, T_Kind>)
+            {
+                throw std::runtime_error(
+                    "device kind '" + std::string{requestedKind}
+                    + "' is not enabled in this build; the required toolkit was not enabled at configure time");
+            }
+            else
+            {
+                auto selector
+                    = alpaka::onHost::makeDeviceSelector(alpaka::onHost::DeviceSpec<T_Api, T_Kind>{T_Api{}, T_Kind{}});
+                if(!selector.isAvailable())
+                    throw std::runtime_error(
+                        "no device of kind '" + std::string{requestedKind} + "' is available on this host");
+                auto device = selector.makeDevice(0);
+                // The driver-backed device must report the api and kind this
+                // code requested; a mismatch would mean the benchmark measured
+                // an unrelated device.
+                if(device.getDeviceKind().getName() != T_Kind{}.getName()
+                   || device.getApi().getName() != T_Api{}.getName())
+                    throw std::runtime_error(
+                        "device driver reported api '" + device.getApi().getName() + "' and kind '"
+                        + device.getDeviceKind().getName() + "', expected api '" + T_Api{}.getName() + "' and kind '"
+                        + T_Kind{}.getName() + "'");
+                return makeFunctorWithExecutor(std::move(device), request, requestedKind);
+            }
+        }
+    } // namespace detail
+
+    /** Build the alpaka GEMM functor for the requested device.
+     *
+     * Every failure is reported by throwing. There is deliberately no fallback
+     * to the host: requesting a GPU on a CPU-only build or missing driver must
+     * fail instead of silently producing CPU timings labelled as GPU data.
+     */
+    [[nodiscard]] inline std::unique_ptr<GemmFunctor> makeAlpakaGemmFunctor(DeviceRequest const& request)
+    {
+        std::string const kind = detail::toLower(request.deviceKind);
+        if(kind == "cpu")
+            return detail::makeFunctorForSpec<alpaka::api::Host, alpaka::deviceKind::Cpu>(request, "cpu");
+        if(kind == "cuda")
+            return detail::makeFunctorForSpec<alpaka::api::Cuda, alpaka::deviceKind::NvidiaGpu>(request, "cuda");
+        if(kind == "hip")
+            return detail::makeFunctorForSpec<alpaka::api::Hip, alpaka::deviceKind::AmdGpu>(request, "hip");
+        if(kind == "oneapi-cpu")
+            return detail::makeFunctorForSpec<alpaka::api::OneApi, alpaka::deviceKind::Cpu>(request, "oneapi-cpu");
+        if(kind == "oneapi-gpu")
+        {
+            if(detail::deviceIsAvailable<alpaka::api::OneApi, alpaka::deviceKind::IntelGpu>())
+                return detail::makeFunctorForSpec<alpaka::api::OneApi, alpaka::deviceKind::IntelGpu>(
+                    request,
+                    "oneapi-gpu");
+            if(detail::deviceIsAvailable<alpaka::api::OneApi, alpaka::deviceKind::NvidiaGpu>())
+                return detail::makeFunctorForSpec<alpaka::api::OneApi, alpaka::deviceKind::NvidiaGpu>(
+                    request,
+                    "oneapi-gpu");
+            if(detail::deviceIsAvailable<alpaka::api::OneApi, alpaka::deviceKind::AmdGpu>())
+                return detail::makeFunctorForSpec<alpaka::api::OneApi, alpaka::deviceKind::AmdGpu>(
+                    request,
+                    "oneapi-gpu");
+            throw std::runtime_error(
+                "device kind 'oneapi-gpu' is not enabled in this build or no oneAPI GPU is available on this host");
+        }
+        throw std::runtime_error(
+            "unknown device kind '" + request.deviceKind
+            + "'; expected one of cpu, cuda, hip, oneapi-cpu, oneapi-gpu");
+    }
 } // namespace gemm::bench

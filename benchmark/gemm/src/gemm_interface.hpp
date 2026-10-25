@@ -64,6 +64,24 @@ namespace gemm::bench
             return {};
         }
 
+        // Optional device identity recorded next to the timing samples. The
+        // harness writes api, device_kind and executor into samples.json so a
+        // record can never be mistaken for a host measurement.
+        [[nodiscard]] virtual std::string_view api() const
+        {
+            return {};
+        }
+
+        [[nodiscard]] virtual std::string_view deviceKind() const
+        {
+            return {};
+        }
+
+        [[nodiscard]] virtual std::string_view executorName() const
+        {
+            return {};
+        }
+
         // Return false when the functor cannot run this precision, layout, or
         // problem size on the compiled target. The reason is recorded verbatim.
         [[nodiscard]] virtual bool supports(Problem const& problem) const = 0;

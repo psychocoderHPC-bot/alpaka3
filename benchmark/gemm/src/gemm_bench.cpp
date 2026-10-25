@@ -14,6 +14,7 @@
 #include "json.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <chrono>
 #include <cmath>
 #include <cstddef>
@@ -54,6 +55,8 @@ namespace
         std::string outputDir{"/tmp/alpaka3-gemm-benchmark"};
         std::string revision{"unknown"};
         std::string target{"cpu-host"};
+        std::string deviceKind{"cpu"};
+        std::string executor{};
         std::string subset{"all"};
         std::string filter{};
         std::size_t samplesPerRound{10};
@@ -64,6 +67,16 @@ namespace
         bool listCases{false};
         bool help{false};
     };
+
+    [[nodiscard, maybe_unused]] std::string toLower(std::string value)
+    {
+        std::transform(
+            value.begin(),
+            value.end(),
+            value.begin(),
+            [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        return value;
+    }
 
     [[noreturn]] void usageError(std::string const& message)
     {
@@ -109,6 +122,10 @@ namespace
                 args.revision = next(i, arg);
             else if(arg == "--target")
                 args.target = next(i, arg);
+            else if(arg == "--device-kind")
+                args.deviceKind = next(i, arg);
+            else if(arg == "--executor")
+                args.executor = next(i, arg);
             else if(arg == "--subset")
                 args.subset = next(i, arg);
             else if(arg == "--filter")
@@ -141,6 +158,8 @@ namespace
                      "/tmp/alpaka3-gemm-benchmark)\n"
                      "  --revision SHA        source revision recorded in samples.json (default: unknown)\n"
                      "  --target NAME         target identifier (default: cpu-host)\n"
+                     "  --device-kind KIND    cpu|cuda|hip|oneapi-cpu|oneapi-gpu (default: cpu)\n"
+                     "  --executor NAME       alpaka executor (default: device default executor)\n"
                      "  --subset all|ci-fast  select the full manifest or its bounded CI subset\n"
                      "  --filter TEXT         keep only case ids containing TEXT\n"
                      "  --samples N           samples per round, N >= 10 (default: 10)\n"
@@ -498,11 +517,16 @@ namespace
                 record["case_id"] = gemm::json::Value::makeString(entry.id);
                 record["family"] = gemm::json::Value::makeString(entry.family);
                 record["target"] = gemm::json::Value::makeString(args.target);
-                record["executor"] = gemm::json::Value::makeString(std::string{functor.name()});
+                record["adapter"] = gemm::json::Value::makeString(std::string{functor.name()});
+                record["executor"] = gemm::json::Value::makeString(std::string{functor.executorName()});
                 if(std::string_view const backend = functor.backend(); !backend.empty())
                     record["backend"] = gemm::json::Value::makeString(std::string{backend});
                 if(std::string_view const deviceName = functor.deviceName(); !deviceName.empty())
                     record["device_name"] = gemm::json::Value::makeString(std::string{deviceName});
+                if(std::string_view const api = functor.api(); !api.empty())
+                    record["api"] = gemm::json::Value::makeString(std::string{api});
+                if(std::string_view const deviceKind = functor.deviceKind(); !deviceKind.empty())
+                    record["device_kind"] = gemm::json::Value::makeString(std::string{deviceKind});
                 record["m"] = makeSize(entry.m);
                 record["n"] = makeSize(entry.n);
                 record["k"] = makeSize(entry.k);
@@ -608,7 +632,14 @@ namespace
         root["kind"] = gemm::json::Value::makeString("alpaka3-gemm-samples");
         root["revision"] = gemm::json::Value::makeString(args.revision);
         root["target"] = gemm::json::Value::makeString(args.target);
-        root["executor"] = gemm::json::Value::makeString(std::string{functor.name()});
+        root["adapter"] = gemm::json::Value::makeString(std::string{functor.name()});
+        root["executor"] = gemm::json::Value::makeString(std::string{functor.executorName()});
+        if(std::string_view const api = functor.api(); !api.empty())
+            root["api"] = gemm::json::Value::makeString(std::string{api});
+        if(std::string_view const deviceKind = functor.deviceKind(); !deviceKind.empty())
+            root["device_kind"] = gemm::json::Value::makeString(std::string{deviceKind});
+        if(std::string_view const deviceName = functor.deviceName(); !deviceName.empty())
+            root["device_name"] = gemm::json::Value::makeString(std::string{deviceName});
         root["manifest"] = gemm::json::Value::makeObject(
             {{"path", gemm::json::Value::makeString(args.manifestPath)},
              {"schema_version", gemm::json::Value::makeString(manifest.schemaVersion)},
@@ -673,10 +704,16 @@ int main(int argc, char** argv)
         fs::path const outputFile = outputDir / "samples.json";
 
 #if defined(GEMM_USE_VENDOR_BASELINE)
+        if(toLower(args.deviceKind) != "cpu")
+            throw std::runtime_error(
+                "the vendor baseline is host-only; --device-kind " + args.deviceKind + " is not supported");
         gemm::bench::VendorGemmFunctor functor;
 #else
-        gemm::bench::AlpakaGemmFunctor functor;
+        auto functorPtr = gemm::bench::makeAlpakaGemmFunctor({args.deviceKind, args.executor});
+        auto& functor = *functorPtr;
 #endif
+        std::cout << "executor=" << functor.executorName() << " api=" << functor.api()
+                  << " device=" << functor.deviceName() << " kind=" << functor.deviceKind() << "\n";
         auto const document = runBenchmark(args, manifest, selected, functor);
 
         std::ofstream out{outputFile};

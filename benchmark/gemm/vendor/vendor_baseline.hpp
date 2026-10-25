@@ -36,6 +36,9 @@ namespace gemm::bench
         [[nodiscard]] std::string_view name() const override;
         [[nodiscard]] std::string_view backend() const override;
         [[nodiscard]] std::string_view deviceName() const override;
+        [[nodiscard]] std::string_view api() const override;
+        [[nodiscard]] std::string_view deviceKind() const override;
+        [[nodiscard]] std::string_view executorName() const override;
 
         [[nodiscard]] bool supports(Problem const& problem) const override;
         [[nodiscard]] std::string unsupportedReason(Problem const& problem) const override;

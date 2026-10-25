@@ -229,6 +229,21 @@ namespace gemm::bench
         return m_impl->deviceName;
     }
 
+    std::string_view VendorGemmFunctor::api() const
+    {
+        return "Host";
+    }
+
+    std::string_view VendorGemmFunctor::deviceKind() const
+    {
+        return "Cpu";
+    }
+
+    std::string_view VendorGemmFunctor::executorName() const
+    {
+        return "openblas";
+    }
+
     bool VendorGemmFunctor::supports(Problem const&) const
     {
         // Always claim support so the harness asks run() for the authoritative
