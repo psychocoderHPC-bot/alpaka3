@@ -92,6 +92,43 @@ median/min/max wall time plus GFLOP/s from useful `2*M*N*K` operations.
 
 The driver refuses an output directory inside the source checkout.
 
+## Device selection
+
+The adapter picks the device from the command line. The default is the host
+CPU, so an existing invocation keeps measuring the CPU:
+
+```bash
+--device-kind cpu          # alpaka Host API, Cpu device kind (default)
+--device-kind cuda         # CUDA API, NVIDIA GPU
+--device-kind hip          # HIP API, AMD GPU
+--device-kind oneapi-cpu   # oneAPI API, CPU device
+--device-kind oneapi-gpu   # oneAPI API, first available Intel/NVIDIA/AMD GPU
+--executor NAME            # optional alpaka executor, e.g. CpuSerial or GpuCuda
+```
+
+Without `--executor` the device's default executor is used. The executor name
+is matched case-insensitively against the executors compiled into the build.
+Devices are only instantiated for toolkits enabled at configure time. A
+requested combination that is not compiled in or has no available device fails
+with a nonzero exit status; the adapter never falls back to the CPU.
+
+Every run prints one identity line before timing:
+
+```text
+executor=GpuCuda api=Cuda device=NVIDIA A30 kind=NvidiaGpu
+```
+
+`samples.json` records the same identity at document and record level in the
+`executor`, `api`, `device_kind`, `device_name` and `adapter` fields. The
+adapter also checks that the created device reports the requested API and
+device kind and aborts on a mismatch.
+
+**A CPU-only build cannot produce GPU numbers.** If CUDA, HIP or oneAPI were
+not enabled at configure time, `--device-kind cuda` (or the corresponding GPU
+kind) exits with an error. Select the backend at configure time as well, for
+example with the root configuration options, and confirm from the printed
+identity line which device actually ran.
+
 ## Plots
 
 ```bash
