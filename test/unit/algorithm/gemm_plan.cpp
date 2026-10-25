@@ -222,6 +222,50 @@ TEST_CASE("gemm plan selected plans pass launch validation", "[gemm][plan][prope
     CHECK(selected == combinations);
 }
 
+TEST_CASE("gemm plan chooses the register-filling tile for compute-heavy shapes", "[gemm][plan][tile]")
+{
+    ModeInfo const& mode = modes[0];
+    std::array<TargetProfile, 2> const profiles{targetProfiles[0], targetProfiles[1]};
+    for(auto const& target : profiles)
+    {
+        GemmFacts const facts = makeFacts(target, mode);
+        GemmCandidateFamily const family = familyOf(facts);
+
+        // The largest per-worker tile TM = maxRegisterTileRows, TN = V is in the family.
+        bool hasLargestTile = false;
+        for(std::size_t i = 0; i < family.size; ++i)
+        {
+            GemmPlan const& plan = family.candidates[i];
+            if(plan.threadM == onHost::internal::maxRegisterTileRows && plan.threadN == target.simdWidth)
+                hasLargestTile = true;
+        }
+        CHECK(hasLargestTile);
+
+        GemmPlanRequest request;
+        request.policy = onHost::GemmStaging::direct;
+
+        // A compute-heavy square problem selects the register block that fills the vector registers.
+        GemmProblem const computeHeavy = makeProblem(mode, 512u, 512u, 512u);
+        PlanSelection const large = selectPlan(computeHeavy, facts, family, request);
+        CHECK(large.plan.threadM == onHost::internal::maxRegisterTileRows);
+        CHECK(large.plan.threadN == target.simdWidth);
+        CHECK(validatePlan(large.plan, computeHeavy, facts, family).legal);
+
+        // Shapes the large tile cannot fill keep the minimal direct fallback as candidate 0.
+        std::array<std::array<std::uint64_t, 3>, 2> const tinyShapes{{
+            {1u, 1u, 1u},
+            {1u, 1024u, 3u},
+        }};
+        for(auto const& shape : tinyShapes)
+        {
+            GemmProblem const tiny = makeProblem(mode, shape[0], shape[1], shape[2]);
+            PlanSelection const small = selectPlan(tiny, facts, family, request);
+            CHECK(small.plan == family.candidates[0]);
+            CHECK(validatePlan(small.plan, tiny, facts, family).legal);
+        }
+    }
+}
+
 TEST_CASE("gemm plan works with minimal facts", "[gemm][plan]")
 {
     TargetProfile const& target = targetProfiles[0];

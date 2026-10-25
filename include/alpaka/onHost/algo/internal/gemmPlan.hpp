@@ -272,6 +272,19 @@ namespace alpaka::onHost::internal
     inline constexpr std::uint32_t maxPlanDimension = 8192;
     /** Documented heuristic cap of the per-worker unrolled work (an estimate, not a device fact). */
     inline constexpr std::uint32_t maxUnrolledWork = 256;
+    /** Largest per-worker M extent in the candidate family.
+     *
+     * Paired with `TN = V` this fills the vector register file: at V=8 (AVX2 fp32) the tile has
+     * `8 * 8 = 64` fp32 accumulators, which is eight 256-bit YMM registers for the output. One
+     * further YMM holds the hoisted eight-element B row and the eight A values are scalar
+     * broadcasts, so about nine of the 16 architectural YMM registers are live, with room for
+     * prefetched operands and temporaries. At V=1 (scalar CPU or GPU) the tile has eight
+     * accumulators; with `TM + TN + 8 = 17` operands and temporaries that is 25 registers, well
+     * below a GPU's 255-register per-thread budget. The register-pressure legality check below
+     * still rejects any candidate that exceeds a reported smaller budget, so the planner falls
+     * back instead of assuming the tile fits.
+     */
+    inline constexpr std::uint32_t maxRegisterTileRows = 8;
     /** Documented conservative register budget used only when no register fact is available (an estimate). */
     inline constexpr std::uint64_t estimatedRegisterBudgetBytes = 2048;
 
@@ -283,12 +296,14 @@ namespace alpaka::onHost::internal
 
     /** Build the bounded candidate family from dimensionless multiples of the compiled quanta.
      *
-     * Axes: per-worker rows TM in {1, 2, 4, 8} times the SIMD width in N (TN = V), worker columns WC in {1, 16}
-     * clamped to the block-thread limit, K block in {8, 16} multiples of the K quantum, and the operand-supply
-     * policy direct plus cooperative stage counts {1, 2, 3}. The product is exactly 64 candidates when both worker
-     * counts exist, and smaller after deduplication on a target whose block limit is one. The minimal fallback
-     * (TM = TN = 1, one worker, direct, K block = 8 quanta) is always the first entry, so width-one and tiny shapes
-     * have a correct plan.
+     * Axes: per-worker rows TM in {1, 2, 4, maxRegisterTileRows} times the SIMD width in N (TN = V), worker
+     * columns WC in {1, 16} clamped to the block-thread limit, K block in {8, 16} multiples of the K quantum, and
+     * the operand-supply policy direct plus cooperative stage counts {1, 2, 3}. The largest candidate is therefore
+     * `TM = maxRegisterTileRows, TN = V`: at V=8 it holds 64 fp32 accumulators (eight YMM) and fills the vector
+     * register file, and it stays in the family at every width so the ranking can choose it. The product is exactly
+     * 64 candidates when both worker counts exist, and smaller after deduplication on a target whose block limit is
+     * one. The minimal fallback (`TM = 1`, `TN = V`, one worker, direct, K block = 8 quanta) is always the first
+     * entry, so width-one and tiny shapes have a correct plan.
      */
     constexpr GemmCandidateFamily buildCandidateFamily(
         std::uint32_t simdWidth,
@@ -310,7 +325,7 @@ namespace alpaka::onHost::internal
             family.candidates[family.size++] = candidate;
         };
 
-        constexpr std::array<std::uint32_t, 4> threadRows{1u, 2u, 4u, 8u};
+        constexpr std::array<std::uint32_t, 4> threadRows{1u, 2u, 4u, maxRegisterTileRows};
         constexpr std::array<std::uint32_t, 2> workerColumns{1u, 16u};
         constexpr std::array<std::uint32_t, 2> kMultiples{8u, 16u};
 
@@ -403,7 +418,9 @@ namespace alpaka::onHost::internal
      *
      * The inputs are the section 6.3 models only: useful-work fraction, input arithmetic intensity, transfer cost
      * derived from the same panel bytes, and resource pressure from the staging bound and the register estimate.
-     * There is no timing, randomness or filesystem state. The weights are frozen heuristic constants.
+     * Intensity and transfer cost use tile extents clipped to the problem, so a register block only scores its
+     * full-tile advantage when the problem actually fills it. There is no timing, randomness or filesystem state.
+     * The weights are frozen heuristic constants.
      */
     inline double scorePlan(GemmPlan const& plan, GemmProblem const& problem, GemmFacts const& facts)
     {
@@ -426,8 +443,16 @@ namespace alpaka::onHost::internal
                                  / padded;
         }
 
-        double const panelBytes = bm * bk * sA + bk * bn * sB;
-        double const macs = 2.0 * bm * bn * bk;
+        // The intensity and transfer advantage of a large tile exists only where the problem can
+        // fill it. Clip the nominal tile extents to the problem: otherwise an 8x8 tile claims the
+        // intensity of a full tile on a 1x1x1 or 1x1024x3 problem and outranks the small direct
+        // fallback. For compute-heavy shapes every candidate tile is fully covered, so the larger
+        // register block keeps its real arithmetic-intensity and operand-reuse advantage.
+        double const effectiveM = std::min(bm, static_cast<double>(problem.m));
+        double const effectiveN = std::min(bn, static_cast<double>(problem.n));
+        double const effectiveK = std::min(bk, static_cast<double>(problem.k));
+        double const panelBytes = effectiveM * effectiveK * sA + effectiveK * effectiveN * sB;
+        double const macs = 2.0 * effectiveM * effectiveN * effectiveK;
         double const arithmeticIntensity = panelBytes > 0.0 ? macs / panelBytes : 0.0;
         double const aiNorm = arithmeticIntensity / (arithmeticIntensity + 8.0);
         // Transfer cost is the inverse of the input intensity: bytes of operand traffic per multiply-accumulate.
