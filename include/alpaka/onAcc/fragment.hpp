@@ -124,11 +124,7 @@ namespace alpaka::onAcc::fragment
         }
 
         /** Block coordinate owned by the given worker stripe. */
-        static constexpr Coord blockCoord(
-            uint32_t workerRow,
-            uint32_t workerCol,
-            uint32_t slot,
-            uint32_t lane)
+        static constexpr Coord blockCoord(uint32_t workerRow, uint32_t workerCol, uint32_t slot, uint32_t lane)
         {
             Coord const local = localCoord(slot, lane);
             return Coord{workerRow * T_M + local.m, workerCol * T_N + local.n};
@@ -169,11 +165,10 @@ namespace alpaka::onAcc::fragment
     namespace internal
     {
         template<typename T_Var, typename T_Element, typename T_Layout>
-        concept compatibleStorage
-            = onAcc::internal::IsLockstepVar<std::remove_cvref_t<T_Var>>::value
-              && std::same_as<typename std::remove_cvref_t<T_Var>::value_type, T_Element>
-              && (std::remove_cvref_t<T_Var>::numSlotsPerWorker >= T_Layout::storageElements)
-              && (T_Layout::width > 0u);
+        concept compatibleStorage = onAcc::internal::IsLockstepVar<std::remove_cvref_t<T_Var>>::value
+                                    && std::same_as<typename std::remove_cvref_t<T_Var>::value_type, T_Element>
+                                    && (std::remove_cvref_t<T_Var>::numSlotsPerWorker >= T_Layout::storageElements)
+                                    && (T_Layout::width > 0u);
     } // namespace internal
 
     /** Ownership of a register-blocked tile inside a block tile of WR x WC worker stripes.
@@ -276,7 +271,7 @@ namespace alpaka::onAcc::fragment
     {
         T value{};
 
-        ALPAKA_FN_INLINE constexpr Simd<T, T_V> vector() const
+        ALPAKA_FN_INLINE ALPAKA_FN_ACC constexpr Simd<T, T_V> vector() const
         {
             return Simd<T, T_V>::fill(value);
         }
@@ -301,7 +296,7 @@ namespace alpaka::onAcc::fragment
         T* data{};
         T_Ownership ownership{};
 
-        ALPAKA_FN_INLINE constexpr void fill(T value) const
+        ALPAKA_FN_INLINE ALPAKA_FN_ACC constexpr void fill(T value) const
         {
             for(uint32_t i = 0u; i < T_Layout::storageElements; ++i)
                 data[i] = value;
@@ -313,7 +308,7 @@ namespace alpaka::onAcc::fragment
          * coordinates outside the logical tile are never visited.
          */
         template<typename T_Fn>
-        ALPAKA_FN_INLINE constexpr void concurrent(T_Fn&& fn) const
+        ALPAKA_FN_INLINE ALPAKA_FN_ACC constexpr void concurrent(T_Fn&& fn) const
         {
             for(uint32_t slot = 0u; slot < T_Layout::slotCount; ++slot)
                 for(uint32_t lane = 0u; lane < T_Layout::width; ++lane)
@@ -324,16 +319,16 @@ namespace alpaka::onAcc::fragment
                     }
         }
 
-        ALPAKA_FN_INLINE constexpr Simd<T, T_Layout::width> pack(uint32_t slot) const
+        ALPAKA_FN_INLINE ALPAKA_FN_ACC constexpr Simd<T, T_Layout::width> pack(uint32_t slot) const
         {
             ALPAKA_ASSERT_ACC(slot < T_Layout::slotCount);
             T* base = data + slot * T_Layout::width;
-            return Simd<T, T_Layout::width>{
-                [base](auto laneIdx) constexpr
-                { return base[static_cast<uint32_t>(laneIdx)]; }};
+            return Simd<T, T_Layout::width>{[base](auto laneIdx) constexpr
+                                            { return base[static_cast<uint32_t>(laneIdx)]; }};
         }
 
-        ALPAKA_FN_INLINE constexpr void setPack(uint32_t slot, Simd<T, T_Layout::width> const& value) const
+        ALPAKA_FN_INLINE ALPAKA_FN_ACC constexpr void setPack(uint32_t slot, Simd<T, T_Layout::width> const& value)
+            const
         {
             ALPAKA_ASSERT_ACC(slot < T_Layout::slotCount);
             T* base = data + slot * T_Layout::width;
@@ -341,27 +336,26 @@ namespace alpaka::onAcc::fragment
                 base[lane] = value[lane];
         }
 
-        ALPAKA_FN_INLINE constexpr RowProjection<T, T_Layout> row(uint32_t localM) const
+        ALPAKA_FN_INLINE ALPAKA_FN_ACC constexpr RowProjection<T, T_Layout> row(uint32_t localM) const
         {
             ALPAKA_ASSERT_ACC(localM < tileM);
-            return RowProjection<T, T_Layout>{
-                data + localM * T_Layout::packsPerRow * T_Layout::width,
-                localM};
+            return RowProjection<T, T_Layout>{data + localM * T_Layout::packsPerRow * T_Layout::width, localM};
         }
 
-        ALPAKA_FN_INLINE constexpr ColumnProjection<T, T_Layout> column(uint32_t localN) const
+        ALPAKA_FN_INLINE ALPAKA_FN_ACC constexpr ColumnProjection<T, T_Layout> column(uint32_t localN) const
         {
             ALPAKA_ASSERT_ACC(localN < tileN);
             return ColumnProjection<T, T_Layout>{data, localN};
         }
 
         /** Broadcast one owned element of this worker. No cross-worker access exists. */
-        ALPAKA_FN_INLINE constexpr Broadcast<T, T_Layout::width> broadcast(uint32_t localM, uint32_t localN) const
+        ALPAKA_FN_INLINE ALPAKA_FN_ACC constexpr Broadcast<T, T_Layout::width> broadcast(
+            uint32_t localM,
+            uint32_t localN) const
         {
             ALPAKA_ASSERT_ACC(T_Layout::ownsLocal(localM, localN));
             auto const slotLane = T_Layout::localSlotLane(localM, localN);
-            return Broadcast<T, T_Layout::width>{
-                data[slotLane.slot * T_Layout::width + slotLane.lane]};
+            return Broadcast<T, T_Layout::width>{data[slotLane.slot * T_Layout::width + slotLane.lane]};
         }
 
         /** Load the owned tile from a global view, zero-filling out-of-range coordinates.
@@ -369,7 +363,8 @@ namespace alpaka::onAcc::fragment
          * Coordinates are tested before the view is dereferenced.
          */
         template<typename T_View>
-        ALPAKA_FN_INLINE constexpr void loadFrom(T_View const& view, uint64_t totalM, uint64_t totalN) const
+        ALPAKA_FN_INLINE ALPAKA_FN_ACC constexpr void loadFrom(T_View const& view, uint64_t totalM, uint64_t totalN)
+            const
         {
             for(uint32_t slot = 0u; slot < T_Layout::slotCount; ++slot)
                 for(uint32_t lane = 0u; lane < T_Layout::width; ++lane)
@@ -388,7 +383,11 @@ namespace alpaka::onAcc::fragment
          * Out-of-range coordinates are not stored. Padded lanes are never stored.
          */
         template<typename T_View, typename T_Fn>
-        ALPAKA_FN_INLINE constexpr void storeTo(T_View& view, T_Fn&& fn, uint64_t totalM, uint64_t totalN) const
+        ALPAKA_FN_INLINE ALPAKA_FN_ACC constexpr void storeTo(
+            T_View& view,
+            T_Fn&& fn,
+            uint64_t totalM,
+            uint64_t totalN) const
         {
             for(uint32_t slot = 0u; slot < T_Layout::slotCount; ++slot)
                 for(uint32_t lane = 0u; lane < T_Layout::width; ++lane)
@@ -408,7 +407,7 @@ namespace alpaka::onAcc::fragment
      */
     template<typename T_Element, typename T_Layout, typename T_Ownership, typename T_Var>
     requires internal::compatibleStorage<T_Var, T_Element, T_Layout>
-    constexpr Fragment<T_Element, T_Layout, T_Ownership> makeFragment(
+    ALPAKA_FN_HOST_ACC constexpr Fragment<T_Element, T_Layout, T_Ownership> makeFragment(
         T_Var& var,
         T_Ownership const& ownership)
     {
@@ -445,41 +444,40 @@ namespace alpaka::onAcc::fragment
 
         std::array<T, T_Layout::storageElements> data{};
 
-        ALPAKA_FN_INLINE constexpr void clear()
+        ALPAKA_FN_INLINE ALPAKA_FN_ACC constexpr void clear()
         {
             for(uint32_t i = 0u; i < T_Layout::storageElements; ++i)
                 data[i] = T{0};
         }
 
-        ALPAKA_FN_INLINE constexpr T a(uint32_t localM) const
+        ALPAKA_FN_INLINE ALPAKA_FN_ACC constexpr T a(uint32_t localM) const
         {
             ALPAKA_ASSERT_ACC(localM < T_Layout::tileM);
             return data[localM];
         }
 
-        ALPAKA_FN_INLINE constexpr void setA(uint32_t localM, T value)
+        ALPAKA_FN_INLINE ALPAKA_FN_ACC constexpr void setA(uint32_t localM, T value)
         {
             ALPAKA_ASSERT_ACC(localM < T_Layout::tileM);
             data[localM] = value;
         }
 
         /** One B lane of a register row. Scalar access keeps the hot loop free of SIMD constructor calls. */
-        ALPAKA_FN_INLINE constexpr T bLane(uint32_t pack, uint32_t lane) const
+        ALPAKA_FN_INLINE ALPAKA_FN_ACC constexpr T bLane(uint32_t pack, uint32_t lane) const
         {
             ALPAKA_ASSERT_ACC(pack < T_Layout::packsPerRow && lane < T_Layout::width);
             return data[T_Layout::bOffset + pack * T_Layout::width + lane];
         }
 
-        ALPAKA_FN_INLINE constexpr Simd<T, T_Layout::width> b(uint32_t pack) const
+        ALPAKA_FN_INLINE ALPAKA_FN_ACC constexpr Simd<T, T_Layout::width> b(uint32_t pack) const
         {
             ALPAKA_ASSERT_ACC(pack < T_Layout::packsPerRow);
             T const* base = data.data() + T_Layout::bOffset + pack * T_Layout::width;
-            return Simd<T, T_Layout::width>{
-                [base](auto laneIdx) constexpr
-                { return base[static_cast<uint32_t>(laneIdx)]; }};
+            return Simd<T, T_Layout::width>{[base](auto laneIdx) constexpr
+                                            { return base[static_cast<uint32_t>(laneIdx)]; }};
         }
 
-        ALPAKA_FN_INLINE constexpr void setB(uint32_t pack, Simd<T, T_Layout::width>& value)
+        ALPAKA_FN_INLINE ALPAKA_FN_ACC constexpr void setB(uint32_t pack, Simd<T, T_Layout::width>& value)
         {
             ALPAKA_ASSERT_ACC(pack < T_Layout::packsPerRow);
             T* base = data.data() + T_Layout::bOffset + pack * T_Layout::width;
@@ -488,14 +486,14 @@ namespace alpaka::onAcc::fragment
         }
 
         /** Broadcast one owned A element of this worker. */
-        ALPAKA_FN_INLINE constexpr Broadcast<T, T_Layout::width> broadcastA(uint32_t localM) const
+        ALPAKA_FN_INLINE ALPAKA_FN_ACC constexpr Broadcast<T, T_Layout::width> broadcastA(uint32_t localM) const
         {
             return Broadcast<T, T_Layout::width>{a(localM)};
         }
 
         /** Load TM A values at column k, zero when the M or K coordinate is out of range. */
         template<typename T_View>
-        ALPAKA_FN_INLINE constexpr void loadColumn(
+        ALPAKA_FN_INLINE ALPAKA_FN_ACC constexpr void loadColumn(
             T_View const& view,
             uint64_t rowBase,
             uint64_t k,
@@ -516,7 +514,7 @@ namespace alpaka::onAcc::fragment
          * Padded lanes and out-of-range N columns become an exact zero.
          */
         template<typename T_View>
-        ALPAKA_FN_INLINE constexpr void loadRow(
+        ALPAKA_FN_INLINE ALPAKA_FN_ACC constexpr void loadRow(
             T_View const& view,
             uint64_t k,
             uint64_t colBase,
@@ -536,14 +534,14 @@ namespace alpaka::onAcc::fragment
     };
 
     template<typename T_Element, typename T_Layout>
-    constexpr OperandFragment<T_Element, T_Layout> makeOperandFragment()
+    ALPAKA_FN_HOST_ACC constexpr OperandFragment<T_Element, T_Layout> makeOperandFragment()
     {
         return OperandFragment<T_Element, T_Layout>{};
     }
 
     /** Unroll a compile-time loop without a compiler pragma. */
     template<uint32_t T_Begin, uint32_t T_End, typename T_Fn>
-    ALPAKA_FN_ACC ALPAKA_FN_INLINE constexpr void staticFor(T_Fn&& fn)
+    ALPAKA_FN_INLINE ALPAKA_FN_ACC constexpr void staticFor(T_Fn&& fn)
     {
         if constexpr(T_Begin < T_End)
         {

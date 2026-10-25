@@ -37,9 +37,7 @@ namespace
     };
 
     template<typename T_Layout>
-    std::vector<std::pair<uint32_t, uint32_t>> ownedCoordinates(
-        uint32_t workerRow,
-        uint32_t workerCol)
+    std::vector<std::pair<uint32_t, uint32_t>> ownedCoordinates(uint32_t workerRow, uint32_t workerCol)
     {
         std::vector<std::pair<uint32_t, uint32_t>> result;
         for(uint32_t slot = 0u; slot < T_Layout::slotCount; ++slot)
@@ -55,8 +53,9 @@ namespace
     template<typename T_Layout>
     void checkOwnership(uint32_t workerRows, uint32_t workerCols)
     {
-        std::vector<uint32_t> owners(static_cast<std::size_t>(workerRows * T_Layout::tileM)
-                                     * workerCols * T_Layout::tileN, 0u);
+        std::vector<uint32_t> owners(
+            static_cast<std::size_t>(workerRows * T_Layout::tileM) * workerCols * T_Layout::tileN,
+            0u);
         for(uint32_t wr = 0u; wr < workerRows; ++wr)
             for(uint32_t wc = 0u; wc < workerCols; ++wc)
                 for(uint32_t slot = 0u; slot < T_Layout::slotCount; ++slot)
@@ -128,10 +127,8 @@ TEST_CASE("gemm fragment operations stay inside worker storage", "[gemm][fragmen
 {
     using Layout = fragment::RegisterBlockedLayout<3, 5, 4>;
     using Ownership = fragment::RegisterBlockedOwnership<3, 5, 4, 2, 3>;
-    using Var = onAcc::internal::LockstepVar<
-        float,
-        CVec<std::uint32_t, 2 * 3, 3 * Layout::storageN>,
-        CVec<std::uint32_t, 2 * 3>>;
+    using Var = onAcc::internal::
+        LockstepVar<float, CVec<std::uint32_t, 2 * 3, 3 * Layout::storageN>, CVec<std::uint32_t, 2 * 3>>;
 
     static_assert(Var::numSlotsPerWorker == Layout::storageElements);
     static_assert(fragment::internal::compatibleStorage<Var, float, Layout>);
@@ -196,25 +193,18 @@ namespace
         std::uint32_t tilesN;
         std::uint32_t totalTiles;
 
-        template<
-            std::uint32_t TM,
-            std::uint32_t TN,
-            std::uint32_t V,
-            std::uint32_t BK,
-            typename T_Acc>
+        template<std::uint32_t TM, std::uint32_t TN, std::uint32_t V, std::uint32_t BK, typename T_Acc>
         ALPAKA_FN_ACC void run(T_Acc const& acc) const
         {
             constexpr std::uint32_t packs = (TN + V - 1u) / V;
-            std::uint32_t const linearBlock = static_cast<std::uint32_t>(
-                alpaka::linearize(acc[layer::block].count(), acc[layer::block].idx()));
+            std::uint32_t const linearBlock
+                = static_cast<std::uint32_t>(alpaka::linearize(acc[layer::block].count(), acc[layer::block].idx()));
             std::uint32_t const blockCount = static_cast<std::uint32_t>(acc[layer::block].count().product());
 
             for(std::uint32_t linear = linearBlock; linear < totalTiles; linear += blockCount)
             {
-                std::uint64_t const originM
-                    = (static_cast<std::uint64_t>(tileBaseM) + linear / tilesN) * TM;
-                std::uint64_t const originN
-                    = (static_cast<std::uint64_t>(tileBaseN) + linear % tilesN) * TN;
+                std::uint64_t const originM = (static_cast<std::uint64_t>(tileBaseM) + linear / tilesN) * TM;
+                std::uint64_t const originN = (static_cast<std::uint64_t>(tileBaseN) + linear % tilesN) * TN;
 
                 std::array<Simd<T_Element, V>, TM * packs> sum;
                 for(auto& value : sum)
@@ -410,27 +400,12 @@ TEMPLATE_LIST_TEST_CASE(
             onHost::memcpy(queue, dA, aHost);
             onHost::memcpy(queue, dB, bHost);
 
-            onHost::GemmView<float> const viewA{
-                onHost::data(dA),
-                m,
-                k,
-                k,
-                onHost::GemmLayout::rowMajor,
-                onHost::GemmOp::none};
-            onHost::GemmView<float> const viewB{
-                onHost::data(dB),
-                k,
-                n,
-                n,
-                onHost::GemmLayout::rowMajor,
-                onHost::GemmOp::none};
-            onHost::GemmView<float> const viewC{
-                onHost::data(dC),
-                m,
-                n,
-                n,
-                onHost::GemmLayout::rowMajor,
-                onHost::GemmOp::none};
+            onHost::GemmView<float> const
+                viewA{onHost::data(dA), m, k, k, onHost::GemmLayout::rowMajor, onHost::GemmOp::none};
+            onHost::GemmView<float> const
+                viewB{onHost::data(dB), k, n, n, onHost::GemmLayout::rowMajor, onHost::GemmOp::none};
+            onHost::GemmView<float> const
+                viewC{onHost::data(dC), m, n, n, onHost::GemmLayout::rowMajor, onHost::GemmOp::none};
 
             auto const regions = onHost::internal::splitRegions(m, n, bm, bn);
 
