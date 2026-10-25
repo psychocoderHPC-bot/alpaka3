@@ -5,6 +5,7 @@
 #pragma once
 
 #include "alpaka/api/trait.hpp"
+#include "alpaka/core/Assert.hpp"
 #include "alpaka/core/common.hpp"
 #include "alpaka/mem/ThreadSpace.hpp"
 #include "alpaka/mem/concepts/IDataSource.hpp"
@@ -71,6 +72,21 @@ namespace alpaka::onAcc
             return std::max(std::min(simdWidth, T_LogicalExtent{}.product()), 1u);
         }
 
+        /** Check whether a compile-time worker extent describes at least one participating worker.
+         *
+         * Runtime worker extents (the worker count is not known at compile time) cannot be checked here; they are
+         * validated by a checked precondition in LockstepScope::foreachImpl(). This predicate exists so the check can
+         * be exercised from tests without instantiating an ill-formed division by zero.
+         */
+        template<typename T_WorkerExtent>
+        consteval bool lockstepWorkerCountIsValid()
+        {
+            if constexpr(alpaka::concepts::CVector<T_WorkerExtent>)
+                return T_WorkerExtent{}.product() > 0u;
+            else
+                return true;
+        }
+
         template<
             typename T_Acc,
             typename T_ValueType,
@@ -78,6 +94,10 @@ namespace alpaka::onAcc
             alpaka::concepts::CVector T_WorkerExtent>
         consteval uint32_t getLockstepSimdWidth(T_LogicalExtent const&, T_WorkerExtent const&)
         {
+            static_assert(
+                T_WorkerExtent{}.product() > 0u,
+                "Lockstep SIMD width computation requires at least one participating worker; a worker count of zero "
+                "would divide by zero.");
             constexpr uint32_t baseWidth = getLockstepSimdWidth<T_Acc, T_ValueType>(T_LogicalExtent{});
             constexpr uint32_t maxOwnedElements = divCeil(T_LogicalExtent{}.product(), T_WorkerExtent{}.product());
             return std::max(std::min(baseWidth, std::bit_floor(maxOwnedElements)), 1u);
@@ -108,6 +128,19 @@ namespace alpaka::onAcc
         static_assert(
             alpaka::concepts::CVector<T_LogicalExtent>,
             "The lockstep logical extent must be compile time known.");
+
+        static_assert(
+            internal::lockstepWorkerCountIsValid<WorkerExtent>(),
+            "A lockstep scope requires at least one participating worker; the given work group has a compile-time "
+            "worker count of zero, which would divide by zero when deriving the distributed storage or the SIMD "
+            "width.");
+
+        /** Accelerator storage type of the scope.
+         *
+         * The scope is bound to the accelerator by reference; it must not outlive the accelerator it was created
+         * from.
+         */
+        using AcceleratorStorage = T_Acc const&;
 
         constexpr LockstepScope(T_Acc const& acc, T_WorkGroup const& workGroup, T_LogicalExtent const& logicalExtent)
             : m_acc{acc}
@@ -156,6 +189,13 @@ namespace alpaka::onAcc
 
         /** Execute a functor concurrently over the logical iteration space without additional data arguments.
          *
+         * @attention Participation rules: fn is invoked once per lockstep iteration owned by the calling worker.
+         * Because the iteration space is not required to be a multiple of the SIMD width, fn may be invoked a
+         * different number of times on different workers, with a different SIMD width, and with a different number of
+         * active lanes. Never place a block/warp collective, a barrier, or any other cross-worker synchronization
+         * inside fn: workers would reach it a different number of times, which is undefined behaviour. Hoist such
+         * operations outside the callback and run them between concurrent() calls instead.
+         *
          * @tparam T_ValueType value type used to select the SIMD width. If void (default) the scalar iteration
          *                     (width 1) is used; an explicit type selects the SIMD width best fitting that datatype
          *                     for the accelerator and logical extent.
@@ -175,6 +215,13 @@ namespace alpaka::onAcc
          * Data arguments are bound to the current lockstep iteration, so each worker only accesses the elements it is
          * responsible for. Arguments such as the handle returned by var() or data wrapped via onAcc::map() are exposed
          * as SIMD references; all other sources are exposed as indexed references.
+         *
+         * @attention Participation rules: fn is invoked once per lockstep iteration owned by the calling worker.
+         * The count of invocations, the SIMD width, and the number of active lanes may differ between workers because
+         * the iteration space need not be a multiple of the SIMD width. Never place a block/warp collective, a
+         * barrier, or any other cross-worker synchronization inside fn: workers would reach it a different number of
+         * times, which is undefined behaviour. Hoist such operations outside the callback and run them between
+         * concurrent() calls instead.
          *
          * @tparam T_ValueType value type used to select the SIMD width. If void (default) the value type is deduced
          *                     from T_Arg0; an explicit type selects the SIMD width best fitting that datatype for the
@@ -221,6 +268,15 @@ namespace alpaka::onAcc
             auto const workerIdx = linearize(workerSpace.getThreadCount(), workerSpace.getThreadIdx());
             auto const workerCount = workerSpace.getThreadCount().product();
 
+            // Checked precondition: a runtime worker count must never be zero. The compile-time worker extent is
+            // rejected by a static_assert in makeLockstep()/LockstepScope; this guard covers work groups that only
+            // expose a runtime count.
+            if(workerCount == 0u)
+            {
+                ALPAKA_ASSERT_ACC(workerCount > 0u);
+                return;
+            }
+
             uint32_t localSlot = 0u;
             for(IdxType linearIdx = workerIdx; linearIdx < logicalSize;)
             {
@@ -250,9 +306,24 @@ namespace alpaka::onAcc
         T_Acc const& m_acc;
         T_WorkGroup m_workGroup;
         T_LogicalExtent m_logicalExtent;
+
+        static_assert(
+            std::is_reference_v<decltype(m_acc)>,
+            "LockstepScope must store the accelerator by reference. Storing a copy would detach the scope from the "
+            "accelerator lifetime and break documented usage.");
     };
 
     /** Create a lockstep execution scope for the given work group and logical extent.
+     *
+     * The returned scope stores a reference to @p acc: it must not outlive the accelerator it was created from, so
+     * pass an lvalue accelerator. The worker count must be at least one; a compile-time worker count of zero is
+     * rejected at compile time, a runtime worker count of zero violates a checked precondition.
+     *
+     * @attention Participation rules: all workers of the group execute the same concurrent() call, but the callback
+     * passed to it may run a different number of times on different workers, and with a different SIMD width and
+     * number of active lanes, because the logical extent need not be a multiple of the SIMD width. Collectives and
+     * cross-worker synchronization must therefore never be placed inside a concurrent() callback. See the
+     * "Participation Rules and Restrictions" section of the lockstep tutorial.
      *
      * @tparam T_LogicalExtent compile-time known alpaka vector describing the logical iteration space extents
      * @param acc the accelerator the scope is executed on
@@ -262,10 +333,14 @@ namespace alpaka::onAcc
      */
     template<alpaka::concepts::CVector T_LogicalExtent>
     ALPAKA_FN_HOST_ACC constexpr auto makeLockstep(
-        auto const& acc,
+        auto&& acc,
         auto const workGroup,
         T_LogicalExtent const& logicalExtent)
     {
+        static_assert(
+            !std::is_rvalue_reference_v<decltype(acc)>,
+            "onAcc::makeLockstep() stores a reference to acc and the returned scope must not outlive it. Pass an "
+            "lvalue accelerator instead of a temporary.");
         return LockstepScope<
             std::decay_t<ALPAKA_TYPEOF(acc)>,
             T_LogicalExtent,

@@ -50,6 +50,13 @@ namespace alpaka::onAcc
     template<typename T_Data, typename T_Mapper>
     struct MappedData
     {
+        /** value type of the wrapped data
+         *
+         * Exposed so that the wrapped data can be used as the first argument of concurrent() with an implicitly
+         * deduced SIMD width, and so that internal::BindValueType_t is well-formed for it.
+         */
+        using value_type = alpaka::GetValueType_t<std::decay_t<T_Data>>;
+
         T_Data data;
         T_Mapper mapper;
 
@@ -78,6 +85,9 @@ namespace alpaka::onAcc
 
     /** Wrap data with an identity index mapping for lockstep concurrent() access.
      *
+     * The returned wrapper is bound per lockstep iteration. It only maps indices; it does not synchronize workers, so
+     * the callback it is passed to must follow the concurrent() participation rules and must not contain collectives.
+     *
      * @param data the data to wrap
      * @return a MappedData wrapper exposing data at the unmodified logical indices
      */
@@ -90,7 +100,10 @@ namespace alpaka::onAcc
     /** Wrap data with a constant index offset for lockstep concurrent() access.
      *
      * Each per-lane logical index is shifted by offset before data is accessed, enabling shifted/neighboring element
-     * access within the same lockstep iteration.
+     * access within the same lockstep iteration. The offset must keep accesses in bounds.
+     *
+     * The returned wrapper only maps indices; it does not synchronize workers, so the callback it is passed to must
+     * follow the concurrent() participation rules and must not contain collectives.
      *
      * @param data the data to wrap
      * @param offset offset added to each per-lane logical index

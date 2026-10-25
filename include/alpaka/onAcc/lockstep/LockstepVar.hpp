@@ -33,6 +33,12 @@ namespace alpaka::onAcc::internal
 
         static constexpr uint32_t numElements = T_LogicalExtent{}.product();
         static constexpr uint32_t workerCount = T_WorkerExtent{}.product();
+
+        static_assert(
+            workerCount > 0u,
+            "LockstepVar requires at least one participating worker; divCeil(logicalElements, workerCount) is "
+            "undefined for a worker count of zero.");
+
         static constexpr uint32_t numSlotsPerWorker = divCeil(numElements, workerCount);
 
         template<uint32_t T_width, typename T_IdxVec>
@@ -55,9 +61,24 @@ namespace alpaka::onAcc::internal
     {
     };
 
+    /** Value type of a lockstep data argument.
+     *
+     * Lockstep variables expose their element type, all other data sources are resolved through GetValueType. The
+     * case is selected by a trait specialization instead of std::conditional_t, because std::conditional_t requires
+     * both branch types to be well-formed and would reject ordinary data arguments that have no nested value_type.
+     */
+    template<typename T, bool = isLockstepVar_v<T>>
+    struct BindValueType
+    {
+        using type = alpaka::GetValueType_t<std::decay_t<T>>;
+    };
+
     template<typename T>
-    using BindValueType_t = std::conditional_t<
-        isLockstepVar_v<T>,
-        typename std::remove_cvref_t<T>::value_type,
-        alpaka::GetValueType_t<std::decay_t<T>>>;
+    struct BindValueType<T, true>
+    {
+        using type = typename std::remove_cvref_t<T>::value_type;
+    };
+
+    template<typename T>
+    using BindValueType_t = typename BindValueType<T>::type;
 } // namespace alpaka::onAcc::internal

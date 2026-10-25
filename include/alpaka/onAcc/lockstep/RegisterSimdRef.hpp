@@ -23,8 +23,12 @@ namespace alpaka::onAcc::internal
     template<typename T, uint32_t T_width>
     struct RegisterSimdRef
     {
-        /** value type of the referenced elements */
-        using value_type = T;
+        /** value type of the referenced elements, without the const qualification of the storage
+         *
+         * A read-only reference (T is const) still loads ordinary, non-const values; only the store operators are
+         * unavailable.
+         */
+        using value_type = std::remove_const_t<T>;
 
         /** @return number of SIMD lanes of this reference */
         static consteval uint32_t width()
@@ -38,7 +42,8 @@ namespace alpaka::onAcc::internal
          */
         constexpr auto load() const
         {
-            return Simd<T, T_width>{[&](auto laneIdx) constexpr { return ptr[static_cast<uint32_t>(laneIdx)]; }};
+            return Simd<value_type, T_width>{[&](auto laneIdx) constexpr
+                                             { return ptr[static_cast<uint32_t>(laneIdx)]; }};
         }
 
         /** Store a Simd value into the referenced local elements.
@@ -47,6 +52,7 @@ namespace alpaka::onAcc::internal
          * @return reference to this object
          */
         template<typename T_Other, typename T_Storage>
+        requires(!std::is_const_v<T>)
         constexpr RegisterSimdRef& operator=(Simd<T_Other, T_width, T_Storage> const& rhs)
         {
             for(uint32_t lane = 0u; lane < T_width; ++lane)
@@ -61,7 +67,9 @@ namespace alpaka::onAcc::internal
          * @return reference to this object
          */
         template<typename T_Rhs>
-        requires(alpaka::concepts::Convertible<T_Rhs, T> && !alpaka::concepts::Simd<std::decay_t<T_Rhs>>)
+        requires(
+            !std::is_const_v<T> && alpaka::concepts::Convertible<T_Rhs, T>
+            && !alpaka::concepts::Simd<std::decay_t<T_Rhs>>)
         constexpr RegisterSimdRef& operator=(T_Rhs const& rhs)
         {
             for(uint32_t lane = 0u; lane < T_width; ++lane)

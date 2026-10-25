@@ -85,10 +85,42 @@ a halo element when reading neighbors.
 API Overview
 ------------
 
-- ``onAcc::makeLockstep(acc, workGroup, logicalExtent)`` creates the lockstep scope.
+- ``onAcc::makeLockstep(acc, workGroup, logicalExtent)`` creates the lockstep scope. It stores a reference to
+  ``acc``, so the scope must not outlive the accelerator.
 - ``scope.var<T>()`` creates the distributed per-worker array.
-- ``scope.concurrent(fn, args...)`` / ``scope.template concurrent<T>(fn, args...)`` run the lockstep iteration.
+- ``scope.concurrent(fn, args...)`` / ``scope.template concurrent<T>(fn, args...)`` run the lockstep iteration. The
+  callback may run a different number of times per worker and must not contain collectives; see
+  `Participation Rules and Restrictions`_.
 - ``onAcc::map(data)`` and ``onAcc::map(data, offset)`` map logical indices before access.
+
+Participation Rules and Restrictions
+------------------------------------
+
+All workers of a work group execute the same ``concurrent()`` call, but they do not necessarily execute the callback
+the same number of times. The rules below are part of the API contract, not an implementation detail.
+
+- The callback runs **once per lockstep iteration owned by the calling worker**. The logical extent does not need to be
+  a multiple of the SIMD width or of the worker count, so different workers can run the callback a different number
+  of times, and a worker can run it zero times.
+- The SIMD width is a **per-invocation run-time property**. When the remaining elements of a worker no longer fill a
+  wide pack, that worker falls back to width-1 tail iterations while other workers, or lanes of the same warp, may
+  still process wide packs. The number of active lanes can therefore differ between invocations and between workers.
+- A block or warp collective, a barrier, or any other cross-worker synchronization **inside the callback is undefined
+  behaviour**. Workers would reach the operation a different number of times, some not at all, so the operation can
+  deadlock or synchronize with unrelated iterations.
+- Hoist every collective out of the callback and execute it between two ``concurrent()`` calls, where all workers of
+  the group run exactly once per pass. The same applies to warp-level primitives and to assumptions about a uniform
+  active-lane mask.
+
+``var()`` storage is partitioned per worker into ``divCeil(logicalExtent.product(), workerCount)`` slots. The slot that
+holds a logical element depends only on the worker and the element, not on the SIMD width of the pass. Successive
+passes with different SIMD widths, or with a different first data argument that selects another value type, therefore
+observe the same storage for the same logical element.
+
+A work group must contain at least one worker. A compile-time worker count of zero is rejected at compile time with a
+diagnostic; a runtime worker count of zero violates a checked precondition (``ALPAKA_ASSERT_ACC``) in the iteration
+loop. A scope stores the accelerator by reference and must not outlive it, so pass an lvalue accelerator to
+``makeLockstep``.
 
 Practical Advice
 ----------------
@@ -100,6 +132,8 @@ Practical Advice
   boilerplate and are the better default for pure element-wise work.
 - Keep the logical extent compile-time known (a ``CVec``) and pass a compile-time frame extent when you use
   ``var()``.
+- Keep callbacks free of collectives, barriers, and cross-worker synchronization; run those operations between
+  ``concurrent()`` calls instead.
 
 Complete Source File
 --------------------
