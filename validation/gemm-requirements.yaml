@@ -1,0 +1,407 @@
+# GEMM requirement records for alpaka3.
+# Specification: alpaka3 GEMM design guide, Version 2, 25 October 2026.
+# Machine-readable companion to design/gemm.md.
+#
+# Record schema follows guide section 11. Every record is pending at M0 and has
+# an empty evidence list. source_sha stays null until a record is first verified.
+
+schema_version: 1
+project: alpaka3-gemm
+owner_default: gemm-implementation
+status_vocabulary: [pending, passed, failed, blocked, not_applicable]
+
+base:
+  repository: psychocoderHPC-bot/alpaka3
+  branch: dev
+  source_sha: 35ba304fd2215117cd1179830d2cbe468ced3285
+  verified_on: "2026-10-25"
+  verification: "git cat-file and git log in the M0 clone of the bot repository gate mirror"
+  lockstep:
+    integration_source_sha: b77f140fde4c5e94ff2a5ef6ddbc5a647a952f64
+    integration_ref: origin/issue-6-lockstep2
+    integration_status: "verified present in the M0 clone; not merged into the base SHA"
+    guide_pr_head_sha: 05290c84b5c2349ff93585a95845e5471bba2540
+    guide_pr_head_status: UNVERIFIED
+    guide_pr_head_note: "the object is absent from the M0 clone and GitHub API access is unavailable; compare before integration"
+  guide_upstream_sha: b7d339d07056a9a2a6c4051cc3927157bc5f0d51
+  guide_upstream_status: UNVERIFIED
+  guide_upstream_note: "not fetched in the M0 clone; the guide inspected this upstream dev snapshot"
+
+hardware_matrix:
+  hal:
+    cuda:
+      required: true
+      observed_devices: ["NVIDIA A30 (compute capability 8.0)"]
+      toolkit: "CUDA 13.4"
+      status: available
+    hip:
+      required: true
+      observed_devices: []
+      toolkit: "hipcc and amdclang absent, ROCm absent"
+      status: unavailable
+      note: "no AMD GPU was observed on hal; the guide requires AMD/HIP validation"
+    oneapi-cpu:
+      required: true
+      observed_devices: ["AMD EPYC 7452 via Intel OpenCL CPU runtime"]
+      toolkit: "icpx 2026.2.0"
+      status: available
+    oneapi-gpu:
+      required: true
+      observed_devices: ["Intel Arc A770 via level_zero"]
+      toolkit: "icpx 2026.2.0"
+      status: available
+  fwk394:
+    cpu:
+      required: true
+      observed_devices: ["Intel Xeon W-2175"]
+      toolkit: "g++ 13.3.0"
+      status: available
+    cuda:
+      required: true
+      observed_devices:
+        - "NVIDIA GeForce RTX 2080 Ti (compute capability 7.5)"
+        - "Quadro GV100 (compute capability 7.0)"
+      toolkit: "CUDA 12.5"
+      status: available
+  nvidia_generations:
+    required_distinct_generations: 3
+    observed:
+      - {generation: "7.0", device: "Quadro GV100", host: fwk394}
+      - {generation: "7.5", device: "NVIDIA GeForce RTX 2080 Ti", host: fwk394}
+      - {generation: "8.0", device: "NVIDIA A30", host: hal}
+  evidence: "external run artifacts, run-id gemm-20261025, logs/hwinv-hal.txt and logs/hwinv-fwk394.txt"
+
+thresholds:
+  source: "guide section 10; frozen at M0"
+  g3_abstraction_overhead:
+    compute_heavy_median_throughput_ratio_to_identical_plan_min: 0.95
+    compute_heavy_tolerance_percent: 5
+    small_cases: "confidence and absolute latency analysis"
+  g4_heuristic_quality:
+    heldout_geomean_ratio_to_best_bounded_family_min: 0.95
+    heldout_per_case_ratio_min: 0.85
+  g5_large_gemm:
+    large_aligned_square_geomean_ratio_to_matched_vendor_min: 0.90
+    large_aligned_square_per_case_ratio_min: 0.80
+  g6_broad_workload:
+    per_target_mode_family_geomean_ratio_to_matched_vendor_min: 0.80
+    blocking_investigation_case_ratio_below: 0.50
+  g7_regression:
+    statistically_supported_regression_percent_max: 5
+    rule: "investigate exceptions rather than average them away"
+  planning:
+    candidate_plans_max_per_operation_type_compiled_target: 64
+    pruning: "prune before expensive instantiation where possible"
+  build:
+    ci_build_budget_seconds: null
+    ci_build_budget_status: UNVERIFIED
+    ci_build_budget_rule: "set an absolute CI budget at M0 from the existing build baseline with the CI flags; record compile time and binary growth"
+    binary_growth_rule: "measure and record; any budget increase requires review and measured benefit"
+  latency_limited:
+    rule: "mark latency-limited cases during M0, report confidence intervals and absolute time, use a predeclared practical tolerance, and never classify a slow case as latency-limited after it fails"
+
+requirements:
+  # G1 Correctness
+  - id: G1-numerical
+    requirement: "All required numerical tests pass on every required supported target and mode."
+    status: pending
+    source_sha: null
+    required_targets: [hal/cuda, hal/hip, hal/oneapi-cpu, hal/oneapi-gpu, fwk394/cpu, fwk394/cuda]
+    modes: [fp32, fp64, fp16_fp32, bf16_fp32]
+    tests: [numerical_reference, numerical_quantized_inputs, tolerance_model, exceptional_values]
+    evidence: []
+    review: {reviewer: null, verdict: pending, findings: []}
+  - id: G1-ownership
+    requirement: "Ownership and layout tests prove exactly-once output ownership and valid A/B coordinates on every required supported target."
+    status: pending
+    source_sha: null
+    required_targets: [hal/cuda, hal/hip, hal/oneapi-cpu, hal/oneapi-gpu, fwk394/cpu, fwk394/cuda]
+    modes: [fp32, fp64, fp16_fp32, bf16_fp32]
+    tests: [ownership_exhaustive, layout_bijection]
+    evidence: []
+    review: {reviewer: null, verdict: pending, findings: []}
+  - id: G1-bounds
+    requirement: "Full and partial M, N and K regions compute every valid output once and suppress invalid loads and stores on every required supported target."
+    status: pending
+    source_sha: null
+    required_targets: [hal/cuda, hal/hip, hal/oneapi-cpu, hal/oneapi-gpu, fwk394/cpu, fwk394/cuda]
+    modes: [fp32, fp64, fp16_fp32, bf16_fp32]
+    tests: [boundary_gemm, guarded_memory, zero_size]
+    evidence: []
+    review: {reviewer: null, verdict: pending, findings: []}
+  - id: G1-queue-lifetime
+    requirement: "Queue lifetime tests pass for planning, packing, scratch, kernel and epilogue dependencies on every required supported target."
+    status: pending
+    source_sha: null
+    required_targets: [hal/cuda, hal/hip, hal/oneapi-cpu, hal/oneapi-gpu, fwk394/cpu, fwk394/cuda]
+    modes: [fp32, fp64, fp16_fp32, bf16_fp32]
+    tests: [async_lifetime, scratch_reuse, multi_queue]
+    evidence: []
+    review: {reviewer: null, verdict: pending, findings: []}
+  # G2 Common source
+  - id: G2-common-source
+    requirement: "Review finds no backend-specific GEMM body, architecture-name branch or special single-thread execution path."
+    status: pending
+    source_sha: null
+    required_targets: [hal/cuda, hal/hip, hal/oneapi-cpu, hal/oneapi-gpu, fwk394/cpu, fwk394/cuda]
+    modes: [fp32, fp64, fp16_fp32, bf16_fp32]
+    tests: [source_policy_review, preprocessor_guard_scan]
+    evidence: []
+    review: {reviewer: null, verdict: pending, findings: []}
+  - id: G2-vendor-symbol
+    requirement: "Every specialized intrinsic dispatches through the alpaka3 vendor/function-symbol interface and common GEMM code contains no backend-selection preprocessor macro."
+    status: pending
+    source_sha: null
+    required_targets: [hal/cuda, hal/hip, hal/oneapi-cpu, hal/oneapi-gpu, fwk394/cpu, fwk394/cuda]
+    modes: [fp32, fp64, fp16_fp32, bf16_fp32]
+    tests: [vendor_symbol_dispatch, fallback_dispatch, non_gemm_primitive_usage]
+    evidence: []
+    review: {reviewer: null, verdict: pending, findings: []}
+  # G3 Abstraction overhead
+  - id: G3-abstraction-overhead
+    requirement: "Against identical-plan explicit code, median throughput on compute-heavy cases is within 5 percent; smaller cases use confidence and absolute latency analysis."
+    status: pending
+    source_sha: null
+    required_targets: [hal/cuda, hal/hip, hal/oneapi-cpu, hal/oneapi-gpu, fwk394/cpu, fwk394/cuda]
+    modes: [fp32, fp64, fp16_fp32, bf16_fp32]
+    tests: [explicit_plan_baseline, small_case_latency_analysis]
+    evidence: []
+    review: {reviewer: null, verdict: pending, findings: []}
+  # G4 Heuristic quality
+  - id: G4-heuristic-geomean
+    requirement: "On held-out shapes per target and mode, the geometric mean throughput ratio to the best bounded-family candidate is at least 0.95."
+    status: pending
+    source_sha: null
+    required_targets: [hal/cuda, hal/hip, hal/oneapi-cpu, hal/oneapi-gpu, fwk394/cpu, fwk394/cuda]
+    modes: [fp32, fp64, fp16_fp32, bf16_fp32]
+    tests: [heldout_shapes, candidate_sweep_oracle]
+    evidence: []
+    review: {reviewer: null, verdict: pending, findings: []}
+  - id: G4-heuristic-per-case
+    requirement: "On held-out shapes per target and mode, each case reaches at least 0.85 of the best bounded-family candidate."
+    status: pending
+    source_sha: null
+    required_targets: [hal/cuda, hal/hip, hal/oneapi-cpu, hal/oneapi-gpu, fwk394/cpu, fwk394/cuda]
+    modes: [fp32, fp64, fp16_fp32, bf16_fp32]
+    tests: [heldout_shapes, candidate_sweep_oracle]
+    evidence: []
+    review: {reviewer: null, verdict: pending, findings: []}
+  # G5 Competitive large GEMM
+  - id: G5-large-gemm
+    requirement: "On large aligned square cases per target and mode, the geometric mean matched-vendor throughput ratio is at least 0.90 and every case is at least 0.80."
+    status: pending
+    source_sha: null
+    required_targets: [hal/cuda, hal/hip, hal/oneapi-cpu, hal/oneapi-gpu, fwk394/cpu, fwk394/cuda]
+    modes: [fp32, fp64, fp16_fp32, bf16_fp32]
+    tests: [large_square_benchmark, matched_vendor_benchmark]
+    evidence: []
+    review: {reviewer: null, verdict: pending, findings: []}
+  # G6 Broad workload
+  - id: G6-broad-workload
+    requirement: "Per target, mode and workload family, the geometric mean matched-vendor throughput ratio is at least 0.80."
+    status: pending
+    source_sha: null
+    required_targets: [hal/cuda, hal/hip, hal/oneapi-cpu, hal/oneapi-gpu, fwk394/cpu, fwk394/cuda]
+    modes: [fp32, fp64, fp16_fp32, bf16_fp32]
+    tests: [broad_workload_benchmark, matched_vendor_benchmark]
+    evidence: []
+    review: {reviewer: null, verdict: pending, findings: []}
+  - id: G6-floor-case
+    requirement: "Any individual case below 0.50 of matched vendor throughput is a blocking investigation rather than hidden in an aggregate."
+    status: pending
+    source_sha: null
+    required_targets: [hal/cuda, hal/hip, hal/oneapi-cpu, hal/oneapi-gpu, fwk394/cpu, fwk394/cuda]
+    modes: [fp32, fp64, fp16_fp32, bf16_fp32]
+    tests: [broad_workload_benchmark, per_case_floor_check]
+    evidence: []
+    review: {reviewer: null, verdict: pending, findings: []}
+  # G7 Regression
+  - id: G7-regression
+    requirement: "No statistically supported regression greater than 5 percent versus the previously accepted common implementation; exceptions are investigated rather than averaged away."
+    status: pending
+    source_sha: null
+    required_targets: [hal/cuda, hal/hip, hal/oneapi-cpu, hal/oneapi-gpu, fwk394/cpu, fwk394/cuda]
+    modes: [fp32, fp64, fp16_fp32, bf16_fp32]
+    tests: [regression_benchmark, variability_report]
+    evidence: []
+    review: {reviewer: null, verdict: pending, findings: []}
+  # G8 Resources
+  - id: G8-resources
+    requirement: "No illegal launch or unbounded scratch occurs; selected hot plans have no unexplained spills; all packing and workspace costs are reported."
+    status: pending
+    source_sha: null
+    required_targets: [hal/cuda, hal/hip, hal/oneapi-cpu, hal/oneapi-gpu, fwk394/cpu, fwk394/cuda]
+    modes: [fp32, fp64, fp16_fp32, bf16_fp32]
+    tests: [launch_legality, scratch_bound, resource_report, spill_check]
+    evidence: []
+    review: {reviewer: null, verdict: pending, findings: []}
+  # G9 Native claims
+  - id: G9-native-evidence
+    requirement: "Each claimed native mode has actual-hardware correctness, instruction and performance evidence; untested supported modes are not counted complete."
+    status: pending
+    source_sha: null
+    required_targets: [hal/cuda, hal/hip, hal/oneapi-cpu, hal/oneapi-gpu, fwk394/cpu, fwk394/cuda]
+    modes: [fp32, fp64, fp16_fp32, bf16_fp32]
+    tests: [native_correctness, native_instruction_check, native_performance]
+    evidence: []
+    review: {reviewer: null, verdict: pending, findings: []}
+  - id: G9-fallback
+    requirement: "Unsupported native capabilities select a tested common fallback and do not break generic builds or instantiate unsupported native combinations."
+    status: pending
+    source_sha: null
+    required_targets: [hal/cuda, hal/hip, hal/oneapi-cpu, hal/oneapi-gpu, fwk394/cpu, fwk394/cuda]
+    modes: [fp32, fp64, fp16_fp32, bf16_fp32]
+    tests: [fallback_correctness, unsupported_combination_rejection]
+    evidence: []
+    review: {reviewer: null, verdict: pending, findings: []}
+  # G10 Maintainability
+  - id: G10-maintainability
+    requirement: "Reproducible commands, plan diagnostics, documented numerical and boundary semantics, reviewed tests and a bounded template instantiation family are present."
+    status: pending
+    source_sha: null
+    required_targets: [hal/cuda, hal/hip, hal/oneapi-cpu, hal/oneapi-gpu, fwk394/cpu, fwk394/cuda]
+    modes: [fp32, fp64, fp16_fp32, bf16_fp32]
+    tests: [reproduction_check, diagnostics_snapshot, template_family_bound]
+    evidence: []
+    review: {reviewer: null, verdict: pending, findings: []}
+
+  # Section 8 structural test family
+  - id: S8-STRUCT-ownership
+    requirement: "Exhaustive small-shape and worker-count enumeration proves exactly-once C ownership and correct A/B coordinates for every layout and transpose."
+    status: pending
+    source_sha: null
+    required_targets: [hal/cuda, hal/hip, hal/oneapi-cpu, hal/oneapi-gpu, fwk394/cpu, fwk394/cuda]
+    modes: [fp32, fp64, fp16_fp32, bf16_fp32]
+    tests: [ownership_exhaustive, layout_bijection, transpose_coordinates]
+    evidence: []
+    review: {reviewer: null, verdict: pending, findings: []}
+  - id: S8-STRUCT-simd-slots
+    requirement: "Unique coordinate IDs in local slots survive passes at different SIMD widths and through compatible views; broadcast reuse works and cross-worker access disguised as local access is rejected."
+    status: pending
+    source_sha: null
+    required_targets: [hal/cuda, hal/hip, hal/oneapi-cpu, hal/oneapi-gpu, fwk394/cpu, fwk394/cuda]
+    modes: [fp32, fp64, fp16_fp32, bf16_fp32]
+    tests: [slot_identity, width_change, broadcast_reuse, cross_worker_rejection]
+    evidence: []
+    review: {reviewer: null, verdict: pending, findings: []}
+  - id: S8-STRUCT-boundaries
+    requirement: "Lengths 0, 1, q-1, q, q+1, 2q-1, 2q and 2q+1 are tested at width, worker and tile boundaries for every relevant quantum q."
+    status: pending
+    source_sha: null
+    required_targets: [hal/cuda, hal/hip, hal/oneapi-cpu, hal/oneapi-gpu, fwk394/cpu, fwk394/cuda]
+    modes: [fp32, fp64, fp16_fp32, bf16_fp32]
+    tests: [quantum_boundaries, tile_boundaries]
+    evidence: []
+    review: {reviewer: null, verdict: pending, findings: []}
+  - id: S8-STRUCT-planner-facts
+    requirement: "Planner tests cover missing cache and register data, small memory, subgroup widths other than 32, width one, large accumulator types and maximum index values using rejection tests."
+    status: pending
+    source_sha: null
+    required_targets: [hal/cuda, hal/hip, hal/oneapi-cpu, hal/oneapi-gpu, fwk394/cpu, fwk394/cuda]
+    modes: [fp32, fp64, fp16_fp32, bf16_fp32]
+    tests: [planner_missing_facts, planner_rejection, planner_max_index]
+    evidence: []
+    review: {reviewer: null, verdict: pending, findings: []}
+  - id: S8-STRUCT-async-lifetime
+    requirement: "Async lifetime tests cover back-to-back operations, distinct queues where supported, scratch reuse and destruction of temporary host handles."
+    status: pending
+    source_sha: null
+    required_targets: [hal/cuda, hal/hip, hal/oneapi-cpu, hal/oneapi-gpu, fwk394/cpu, fwk394/cuda]
+    modes: [fp32, fp64, fp16_fp32, bf16_fp32]
+    tests: [async_lifetime, multi_queue, scratch_reuse]
+    evidence: []
+    review: {reviewer: null, verdict: pending, findings: []}
+
+  # Section 8 numerical test family
+  - id: S8-NUM-reference
+    requirement: "A separately implemented scalar reference validates all modes, using FP64 reference accumulation for FP32 and converted FP16/BF16 inputs and a verified higher-precision or compensated reference for FP64."
+    status: pending
+    source_sha: null
+    required_targets: [hal/cuda, hal/hip, hal/oneapi-cpu, hal/oneapi-gpu, fwk394/cpu, fwk394/cuda]
+    modes: [fp32, fp64, fp16_fp32, bf16_fp32]
+    tests: [scalar_reference, higher_precision_reference]
+    evidence: []
+    review: {reviewer: null, verdict: pending, findings: []}
+  - id: S8-NUM-quantized-inputs
+    requirement: "Accumulation is compared against the actual quantized FP16 and BF16 inputs, and input-quantization error against original FP32 is reported separately."
+    status: pending
+    source_sha: null
+    required_targets: [hal/cuda, hal/hip, hal/oneapi-cpu, hal/oneapi-gpu, fwk394/cpu, fwk394/cuda]
+    modes: [fp32, fp64, fp16_fp32, bf16_fp32]
+    tests: [quantized_input_accumulation, quantization_error_report]
+    evidence: []
+    review: {reviewer: null, verdict: pending, findings: []}
+  - id: S8-NUM-tolerance
+    requirement: "Tolerances are defined before benchmarking with a forward-error scale involving sum of abs(A_ik times B_kj), alpha and beta, and output conversion; n*u >= 1 uses a different validation approach."
+    status: pending
+    source_sha: null
+    required_targets: [hal/cuda, hal/hip, hal/oneapi-cpu, hal/oneapi-gpu, fwk394/cpu, fwk394/cuda]
+    modes: [fp32, fp64, fp16_fp32, bf16_fp32]
+    tests: [tolerance_model, error_scale_report, worst_coordinate_report]
+    evidence: []
+    review: {reviewer: null, verdict: pending, findings: []}
+  - id: S8-NUM-exceptional
+    requirement: "Exceptional values follow the declared numerical mode, including signed zero, ties, subnormals, overflow, infinities and NaNs; flush behavior is exposed and tested or excluded from strict mode."
+    status: pending
+    source_sha: null
+    required_targets: [hal/cuda, hal/hip, hal/oneapi-cpu, hal/oneapi-gpu, fwk394/cpu, fwk394/cuda]
+    modes: [fp32, fp64, fp16_fp32, bf16_fp32]
+    tests: [conversion_edge_cases, exceptional_values, subnormal_contract]
+    evidence: []
+    review: {reviewer: null, verdict: pending, findings: []}
+  - id: S8-NUM-patterns
+    requirement: "Random signs, cancellation, zeros, identity, diagonal, rank-one, scale-separated magnitudes and reproducible seeds are covered."
+    status: pending
+    source_sha: null
+    required_targets: [hal/cuda, hal/hip, hal/oneapi-cpu, hal/oneapi-gpu, fwk394/cpu, fwk394/cuda]
+    modes: [fp32, fp64, fp16_fp32, bf16_fp32]
+    tests: [pattern_matrix_suite, seeded_random_suite]
+    evidence: []
+    review: {reviewer: null, verdict: pending, findings: []}
+
+  # Section 8 memory and concurrency test family
+  - id: S8-MEM-canaries
+    requirement: "Canaries and deliberately short or non-divisible views, misaligned subviews and padded leading dimensions detect out-of-bounds access."
+    status: pending
+    source_sha: null
+    required_targets: [hal/cuda, hal/hip, hal/oneapi-cpu, hal/oneapi-gpu, fwk394/cpu, fwk394/cuda]
+    modes: [fp32, fp64, fp16_fp32, bf16_fp32]
+    tests: [canary_guard, padded_strides, misaligned_subviews]
+    evidence: []
+    review: {reviewer: null, verdict: pending, findings: []}
+  - id: S8-MEM-sanitizers
+    requirement: "Available host sanitizers and backend memory, race and synchronization diagnostics run with documented tool limitations."
+    status: pending
+    source_sha: null
+    required_targets: [hal/cuda, hal/hip, hal/oneapi-cpu, hal/oneapi-gpu, fwk394/cpu, fwk394/cuda]
+    modes: [fp32, fp64, fp16_fp32, bf16_fp32]
+    tests: [host_sanitizers, compute_sanitizer, race_diagnostics]
+    evidence: []
+    review: {reviewer: null, verdict: pending, findings: []}
+  - id: S8-MEM-stress
+    requirement: "Stress tests cover many tiles, stage wraparound, low block residency and repeated launches."
+    status: pending
+    source_sha: null
+    required_targets: [hal/cuda, hal/hip, hal/oneapi-cpu, hal/oneapi-gpu, fwk394/cpu, fwk394/cuda]
+    modes: [fp32, fp64, fp16_fp32, bf16_fp32]
+    tests: [tile_stress, stage_wraparound, repeated_launch]
+    evidence: []
+    review: {reviewer: null, verdict: pending, findings: []}
+  - id: S8-PIPE-state-machine
+    requirement: "A host state machine simulates legal participant interleavings: no read before ready, no overwrite before release, matched commits and consumes, correct generations and visible initialized data."
+    status: pending
+    source_sha: null
+    required_targets: [hal/cuda, hal/hip, hal/oneapi-cpu, hal/oneapi-gpu, fwk394/cpu, fwk394/cuda]
+    modes: [fp32, fp64, fp16_fp32, bf16_fp32]
+    tests: [pipeline_state_machine, generation_tracking]
+    evidence: []
+    review: {reviewer: null, verdict: pending, findings: []}
+  - id: S8-PIPE-device
+    requirement: "Device execution validates the stage state machine; the simulator remains a model, not proof of hardware memory ordering."
+    status: pending
+    source_sha: null
+    required_targets: [hal/cuda, hal/hip, hal/oneapi-cpu, hal/oneapi-gpu, fwk394/cpu, fwk394/cuda]
+    modes: [fp32, fp64, fp16_fp32, bf16_fp32]
+    tests: [pipeline_device, sequential_progress]
+    evidence: []
+    review: {reviewer: null, verdict: pending, findings: []}
