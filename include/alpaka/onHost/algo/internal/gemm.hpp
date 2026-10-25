@@ -81,6 +81,18 @@ namespace alpaka::onHost
         bf16ToFp32
     };
 
+    /** Kernel implementation selected for the multiply-accumulate path.
+     *
+     * registerBlocked is the M3 default: one register-blocked outer-product per worker. simple keeps the M2 direct
+     * path without operand reuse selectable for comparison and regression testing. Both paths share the same tile
+     * regions, boundaries and numerical contract.
+     */
+    enum class GemmKernel : std::uint8_t
+    {
+        registerBlocked,
+        simple
+    };
+
     /** Non-owning GEMM matrix view.
      *
      * rows and cols are the *logical* extents of the view before applying op. The stored matrix therefore has
@@ -126,7 +138,7 @@ namespace alpaka::onHost
         }
 
         /** Element (i, k) of the logical operand. */
-        [[nodiscard]] constexpr auto& at(std::size_t i, std::size_t k) const
+        [[nodiscard]] ALPAKA_FN_INLINE constexpr auto& at(std::size_t i, std::size_t k) const
         {
             return op == GemmOp::none ? stored(i, k) : stored(k, i);
         }
@@ -263,6 +275,36 @@ namespace alpaka::onHost
 
             constexpr std::uint32_t threads = blockThreadCount<T_Acc, T_Api, T_DeviceKind, T_Exec>();
             return TileConfig{tile, bk, threads};
+        }
+
+        /** Compile-time register-blocked plan.
+         *
+         * The per-worker tile stays near 64 element accumulators: TM*TN is 64. The SIMD width is the M3 model,
+         * min(architecture width, cache-line elements, TN) rounded down to a power of two, clamped to one. The block
+         * tile is the worker grid times the per-worker tile; larger logical tiles come from more work groups, never
+         * from a larger per-thread accumulator.
+         */
+        struct RegisterTileConfig
+        {
+            std::uint32_t tm;
+            std::uint32_t tn;
+            std::uint32_t wr;
+            std::uint32_t wc;
+            std::uint32_t bk;
+        };
+
+        template<typename T_Acc, typename T_Api, typename T_DeviceKind, typename T_Exec>
+        consteval RegisterTileConfig registerTileConfig()
+        {
+            constexpr std::uint32_t arch = std::max(getArchSimdWidth<T_Acc>(T_Api{}, T_DeviceKind{}), 1u);
+            constexpr std::uint32_t lineElements
+                = static_cast<std::uint32_t>(getCachelineSize(T_Api{}, T_DeviceKind{}) / sizeof(T_Acc));
+            constexpr std::uint32_t maxWidth = std::max(std::bit_floor(std::min(arch, lineElements)), 1u);
+            constexpr std::uint32_t tn = maxWidth >= 8u ? 16u : (maxWidth >= 4u ? 8u : 4u);
+            constexpr std::uint32_t tm = 64u / tn;
+            constexpr std::uint32_t bk = arch >= 8u ? 16u : 8u;
+            constexpr std::uint32_t threads = blockThreadCount<T_Acc, T_Api, T_DeviceKind, T_Exec>();
+            return RegisterTileConfig{tm, tn, 1u, threads, bk};
         }
 
         struct TileRegion
@@ -433,6 +475,76 @@ namespace alpaka::onHost
         }
 
         template<
+            std::uint32_t T_TM,
+            std::uint32_t T_TN,
+            std::uint32_t T_WR,
+            std::uint32_t T_WC,
+            std::uint32_t T_BK,
+            std::uint32_t T_Threads,
+            typename T_Acc,
+            typename T_Queue,
+            typename T_Exec,
+            typename T_C,
+            typename T_A,
+            typename T_B,
+            typename T_Alpha,
+            typename T_Beta>
+        void launchGemmTilesRegisterBlocked(
+            T_Queue const& queue,
+            T_Exec const& exec,
+            GemmView<T_C> c,
+            GemmView<T_A> a,
+            GemmView<T_B> b,
+            std::uint64_t m,
+            std::uint64_t n,
+            std::uint64_t k,
+            T_Alpha alpha,
+            T_Beta beta)
+        {
+            constexpr std::uint32_t bm = T_WR * T_TM;
+            constexpr std::uint32_t bn = T_WC * T_TN;
+            TileRegions const regions = splitRegions(m, n, bm, bn);
+            auto const launch = [&](TileRegion const& region)
+            {
+                std::uint64_t const rows = region.tileRowEnd - region.tileRowBegin;
+                std::uint64_t const cols = region.tileColEnd - region.tileColBegin;
+                if(rows == 0u || cols == 0u)
+                    return;
+                auto const numTiles = static_cast<std::uint32_t>(checkedMul(rows, cols, "region tile count"));
+                queue.enqueue(
+                    onHost::FrameSpec{Vec{numTiles}, CVec<std::uint32_t, T_Threads>{}, exec},
+                    KernelBundle{onAcc::gemm::RegisterBlockedGemmTileKernel<
+                        T_Acc,
+                        GemmView<T_C>,
+                        GemmView<T_A>,
+                        GemmView<T_B>,
+                        T_Alpha,
+                        T_Beta,
+                        T_TM,
+                        T_TN,
+                        T_WR,
+                        T_WC,
+                        T_BK>{
+                        c,
+                        a,
+                        b,
+                        m,
+                        n,
+                        k,
+                        alpha,
+                        beta,
+                        static_cast<std::uint32_t>(region.tileRowBegin),
+                        static_cast<std::uint32_t>(region.tileColBegin),
+                        static_cast<std::uint32_t>(cols),
+                        numTiles}});
+            };
+            launch(regions.full);
+            launch(regions.bottom);
+            launch(regions.right);
+            launch(regions.corner);
+        }
+
+        template<
             std::uint32_t T_BM,
             std::uint32_t T_BN,
             std::uint32_t T_Threads,
@@ -549,7 +661,8 @@ namespace alpaka::onHost
             GemmView<T_A> a,
             GemmView<T_B> b,
             T_Alpha alpha,
-            T_Beta beta)
+            T_Beta beta,
+            GemmKernel kernel)
         {
             using Api = std::remove_cvref_t<decltype(queue.getApi())>;
             using DeviceKind = std::remove_cvref_t<decltype(queue.getDeviceKind())>;
@@ -568,7 +681,25 @@ namespace alpaka::onHost
 
             if(readOperands)
             {
-                dispatchTile<T_Acc, blockThreads>(config, queue, exec, c, a, b, m, n, k, alpha, beta, config);
+                if(kernel == GemmKernel::registerBlocked)
+                {
+                    constexpr RegisterTileConfig rb = registerTileConfig<T_Acc, Api, DeviceKind, T_Exec>();
+                    launchGemmTilesRegisterBlocked<rb.tm, rb.tn, rb.wr, rb.wc, rb.bk, blockThreads, T_Acc>(
+                        queue,
+                        exec,
+                        c,
+                        a,
+                        b,
+                        m,
+                        n,
+                        k,
+                        alpha,
+                        beta);
+                }
+                else
+                {
+                    dispatchTile<T_Acc, blockThreads>(config, queue, exec, c, a, b, m, n, k, alpha, beta, config);
+                }
             }
             else if(writeOutput)
             {
