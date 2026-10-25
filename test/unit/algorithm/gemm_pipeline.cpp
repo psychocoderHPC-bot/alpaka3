@@ -443,27 +443,9 @@ namespace
         onHost::gemm(
             queue,
             exec,
-            onHost::GemmView<Output>{
-                onHost::data(dC),
-                m,
-                n,
-                n,
-                onHost::GemmLayout::rowMajor,
-                onHost::GemmOp::none},
-            onHost::GemmView<Storage>{
-                onHost::data(dA),
-                m,
-                k,
-                k,
-                onHost::GemmLayout::rowMajor,
-                onHost::GemmOp::none},
-            onHost::GemmView<Storage>{
-                onHost::data(dB),
-                k,
-                n,
-                n,
-                onHost::GemmLayout::rowMajor,
-                onHost::GemmOp::none},
+            onHost::GemmView<Output>{onHost::data(dC), m, n, n, onHost::GemmLayout::rowMajor, onHost::GemmOp::none},
+            onHost::GemmView<Storage>{onHost::data(dA), m, k, k, onHost::GemmLayout::rowMajor, onHost::GemmOp::none},
+            onHost::GemmView<Storage>{onHost::data(dB), k, n, n, onHost::GemmLayout::rowMajor, onHost::GemmOp::none},
             alpha,
             beta,
             hostMode,
@@ -483,15 +465,8 @@ namespace
             false,
             false);
         MatrixView<Output> const candidateView{candidate.data(), m, n, n, Layout::rowMajor, Op::none};
-        auto const report = validation::gemm::compareGemm(
-            model,
-            candidateView,
-            referenceView,
-            aView,
-            bView,
-            cOldView,
-            alpha,
-            beta);
+        auto const report
+            = validation::gemm::compareGemm(model, candidateView, referenceView, aView, bView, cOldView, alpha, beta);
         INFO(
             "mode " << static_cast<int>(mode) << " policy " << static_cast<int>(policy) << " stages " << stages
                     << " shape " << m << "x" << n << "x" << k);
@@ -549,9 +524,7 @@ TEST_CASE("gemm pipeline deadlock guard fails instead of hanging", "[gemm][pipel
     auto const fill = [](std::uint64_t, Token, Phase) {};
     auto const compute = [](std::uint64_t, Token, Phase) {};
 
-    CHECK_THROWS_WITH(
-        pipe.run(0, 2u, false, fill, compute),
-        "gemm pipeline deadlock guard: stage never became ready");
+    CHECK_THROWS_WITH(pipe.run(0, 2u, false, fill, compute), "gemm pipeline deadlock guard: stage never became ready");
 }
 
 TEMPLATE_LIST_TEST_CASE(

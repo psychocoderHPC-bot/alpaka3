@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <cstdint>
 
+// clang-format off
 /** @file
  *
  * Explicit bounded stage pipeline for the common GEMM kernel.
@@ -34,6 +35,7 @@
  * the synchronous policy today and becomes distinct only when a capable, tested asynchronous copy primitive is
  * available. No backend branch and no native copy is present in this component.
  */
+// clang-format on
 
 namespace alpaka::onAcc::gemm::pipeline
 {
