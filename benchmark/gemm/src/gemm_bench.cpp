@@ -5,7 +5,11 @@
 // output directory outside the source checkout. The M0 placeholder functor
 // reports "not implemented" instead of inventing timings.
 
-#include "gemm_alpaka.hpp"
+#if defined(GEMM_USE_VENDOR_BASELINE)
+#    include "vendor_baseline.hpp"
+#else
+#    include "gemm_alpaka.hpp"
+#endif
 #include "gemm_interface.hpp"
 #include "json.hpp"
 
@@ -482,6 +486,7 @@ namespace
         gemm::json::Value::Array records;
         bool allOk = !cases.empty();
         bool anyNotImplemented = false;
+        bool anyUnavailable = false;
 
         for(auto const& entry : cases)
         {
@@ -494,6 +499,10 @@ namespace
                 record["family"] = gemm::json::Value::makeString(entry.family);
                 record["target"] = gemm::json::Value::makeString(args.target);
                 record["executor"] = gemm::json::Value::makeString(std::string{functor.name()});
+                if(std::string_view const backend = functor.backend(); !backend.empty())
+                    record["backend"] = gemm::json::Value::makeString(std::string{backend});
+                if(std::string_view const deviceName = functor.deviceName(); !deviceName.empty())
+                    record["device_name"] = gemm::json::Value::makeString(std::string{deviceName});
                 record["m"] = makeSize(entry.m);
                 record["n"] = makeSize(entry.n);
                 record["k"] = makeSize(entry.k);
@@ -523,10 +532,15 @@ namespace
                     functor.synchronize();
                     if(!probe.executed)
                     {
-                        record["status"] = gemm::json::Value::makeString("not_implemented");
+                        std::string const status
+                            = probe.status.empty() ? std::string{"not_implemented"} : probe.status;
+                        record["status"] = gemm::json::Value::makeString(status);
                         record["detail"] = gemm::json::Value::makeString(probe.detail);
                         allOk = false;
-                        anyNotImplemented = true;
+                        if(status == "not_implemented")
+                            anyNotImplemented = true;
+                        else
+                            anyUnavailable = true;
                     }
                     else
                     {
@@ -579,8 +593,15 @@ namespace
             }
         }
 
-        std::string const overall
-            = !allOk ? (anyNotImplemented ? "not_implemented" : "incomplete") : (records.empty() ? "empty" : "ok");
+        std::string overall;
+        if(allOk)
+            overall = records.empty() ? "empty" : "ok";
+        else if(anyNotImplemented)
+            overall = "not_implemented";
+        else if(anyUnavailable)
+            overall = "vendor_unavailable";
+        else
+            overall = "incomplete";
 
         gemm::json::Value::Object root;
         root["schema_version"] = gemm::json::Value::makeString("1.0.0");
@@ -651,7 +672,11 @@ int main(int argc, char** argv)
         fs::create_directories(outputDir);
         fs::path const outputFile = outputDir / "samples.json";
 
+#if defined(GEMM_USE_VENDOR_BASELINE)
+        gemm::bench::VendorGemmFunctor functor;
+#else
         gemm::bench::AlpakaGemmFunctor functor;
+#endif
         auto const document = runBenchmark(args, manifest, selected, functor);
 
         std::ofstream out{outputFile};

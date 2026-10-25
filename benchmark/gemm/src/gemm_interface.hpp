@@ -39,6 +39,10 @@ namespace gemm::bench
     {
         bool executed{true};
         std::string detail{};
+        // Optional machine-readable status for a functor that declines to run a
+        // problem. An empty value keeps the harness default ("not_implemented").
+        // External baselines use this to report e.g. "vendor_unavailable".
+        std::string status{};
     };
 
     class GemmFunctor
@@ -47,6 +51,18 @@ namespace gemm::bench
         virtual ~GemmFunctor() = default;
 
         [[nodiscard]] virtual std::string_view name() const = 0;
+
+        // Optional provenance recorded on every sample. Empty values are not
+        // written, so the in-tree functor keeps the original samples.json shape.
+        [[nodiscard]] virtual std::string_view backend() const
+        {
+            return {};
+        }
+
+        [[nodiscard]] virtual std::string_view deviceName() const
+        {
+            return {};
+        }
 
         // Return false when the functor cannot run this precision, layout, or
         // problem size on the compiled target. The reason is recorded verbatim.

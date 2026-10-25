@@ -51,3 +51,6 @@ add_test(
         gemm_bench --smoke --subset ci-fast --filter tiny-1x1x1 --output-dir
         "${CMAKE_CURRENT_BINARY_DIR}/gemm_bench_smoke_ctest"
 )
+
+# Optional benchmark-only reference baseline (default OFF, no fetch when off).
+add_subdirectory(vendor)
