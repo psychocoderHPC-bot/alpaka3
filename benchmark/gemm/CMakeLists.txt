@@ -6,11 +6,24 @@ cmake_minimum_required(VERSION 3.25)
 set_property(GLOBAL PROPERTY USE_FOLDERS ON)
 project(alpakaGemmBenchmark LANGUAGES CXX)
 
-# The harness itself is portable C++20 and does not require a GPU backend to
-# compile. The real GEMM implementation plugs in behind GemmFunctor later.
+if(NOT TARGET alpaka::alpaka)
+    option(alpaka_USE_SOURCE_TREE "Use alpaka's source tree instead of an alpaka installation" OFF)
+    if(alpaka_USE_SOURCE_TREE)
+        # Don't build the benchmarks recursively
+        set(alpaka_BENCHMARKS OFF)
+        add_subdirectory("${CMAKE_CURRENT_LIST_DIR}/../.." "${CMAKE_BINARY_DIR}/alpaka")
+    else()
+        find_package(alpaka REQUIRED)
+    endif()
+endif()
+
+# The harness itself is portable C++20; the M2 adapter drives the real
+# common-source GEMM kernel through the public host API.
 add_executable(gemm_bench "src/gemm_bench.cpp" "src/json.cpp")
 target_compile_features(gemm_bench PRIVATE cxx_std_20)
 target_include_directories(gemm_bench PRIVATE "src")
+target_link_libraries(gemm_bench PRIVATE alpaka::alpaka)
+alpaka_finalize(gemm_bench)
 
 get_filename_component(GEMM_CHECKOUT_ROOT "${CMAKE_CURRENT_LIST_DIR}/../.." ABSOLUTE)
 target_compile_definitions(

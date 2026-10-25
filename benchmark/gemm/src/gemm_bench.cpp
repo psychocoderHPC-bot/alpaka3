@@ -5,6 +5,7 @@
 // output directory outside the source checkout. The M0 placeholder functor
 // reports "not implemented" instead of inventing timings.
 
+#include "gemm_alpaka.hpp"
 #include "gemm_interface.hpp"
 #include "json.hpp"
 
@@ -650,7 +651,7 @@ int main(int argc, char** argv)
         fs::create_directories(outputDir);
         fs::path const outputFile = outputDir / "samples.json";
 
-        PlaceholderFunctor functor;
+        gemm::bench::AlpakaGemmFunctor functor;
         auto const document = runBenchmark(args, manifest, selected, functor);
 
         std::ofstream out{outputFile};
