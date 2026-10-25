@@ -57,6 +57,7 @@ namespace
         std::string target{"cpu-host"};
         std::string deviceKind{"cpu"};
         std::string executor{};
+        std::string staging{"automatic"};
         std::string subset{"all"};
         std::string filter{};
         std::size_t samplesPerRound{10};
@@ -126,6 +127,8 @@ namespace
                 args.deviceKind = next(i, arg);
             else if(arg == "--executor")
                 args.executor = next(i, arg);
+            else if(arg == "--staging")
+                args.staging = next(i, arg);
             else if(arg == "--subset")
                 args.subset = next(i, arg);
             else if(arg == "--filter")
@@ -147,6 +150,9 @@ namespace
             else
                 usageError("unknown option: " + arg);
         }
+        args.staging = toLower(args.staging);
+        if(args.staging != "automatic" && args.staging != "direct" && args.staging != "cooperative")
+            usageError("--staging must be 'automatic', 'direct' or 'cooperative', got: " + args.staging);
         return args;
     }
 
@@ -160,6 +166,7 @@ namespace
                      "  --target NAME         target identifier (default: cpu-host)\n"
                      "  --device-kind KIND    cpu|cuda|hip|oneapi-cpu|oneapi-gpu (default: cpu)\n"
                      "  --executor NAME       alpaka executor (default: device default executor)\n"
+                     "  --staging POLICY      automatic|direct|cooperative operand supply (default: automatic)\n"
                      "  --subset all|ci-fast  select the full manifest or its bounded CI subset\n"
                      "  --filter TEXT         keep only case ids containing TEXT\n"
                      "  --samples N           samples per round, N >= 10 (default: 10)\n"
@@ -495,6 +502,31 @@ namespace
         return gemm::json::Value::makeNumber(static_cast<double>(value));
     }
 
+    /** One-line plan summary for the measurement log. */
+    void printPlan(gemm::bench::PlanSummary const& plan, std::string const& caseId)
+    {
+        std::cout << "plan case=" << caseId << " tileM=" << plan.tileM << " tileN=" << plan.tileN
+                  << " WR=" << plan.workerRows << " WC=" << plan.workerCols << " BK=" << plan.kBlock
+                  << " stages=" << plan.stages << " policy=" << plan.policy << " simd=" << plan.simdWidth
+                  << " scratch=" << plan.scratchBytes << "\n";
+    }
+
+    /** Recorded plan fields, written from the planner diagnostics the adapter captured. */
+    gemm::json::Value makePlanRecord(gemm::bench::PlanSummary const& plan)
+    {
+        gemm::json::Value::Object object;
+        object["tile_m"] = makeSize(plan.tileM);
+        object["tile_n"] = makeSize(plan.tileN);
+        object["worker_rows"] = makeSize(plan.workerRows);
+        object["worker_cols"] = makeSize(plan.workerCols);
+        object["k_block"] = makeSize(plan.kBlock);
+        object["stages"] = makeSize(plan.stages);
+        object["policy"] = gemm::json::Value::makeString(plan.policy);
+        object["simd_width"] = makeSize(plan.simdWidth);
+        object["scratch_bytes"] = makeSize(static_cast<std::size_t>(plan.scratchBytes));
+        return gemm::json::Value::makeObject(std::move(object));
+    }
+
     gemm::json::Value runBenchmark(
         Arguments const& args,
         Manifest const& manifest,
@@ -568,6 +600,11 @@ namespace
                     }
                     else
                     {
+                        if(std::optional<gemm::bench::PlanSummary> const plan = functor.plan(); plan)
+                        {
+                            printPlan(*plan, entry.id);
+                            record["plan"] = makePlanRecord(*plan);
+                        }
                         for(std::size_t warmup = 0; warmup < args.warmups; ++warmup)
                         {
                             functor.resetOutput(problem);
@@ -707,9 +744,12 @@ int main(int argc, char** argv)
         if(toLower(args.deviceKind) != "cpu")
             throw std::runtime_error(
                 "the vendor baseline is host-only; --device-kind " + args.deviceKind + " is not supported");
+        if(args.staging != "automatic")
+            throw std::runtime_error("the vendor baseline has no selectable staging policy");
         gemm::bench::VendorGemmFunctor functor;
 #else
-        auto functorPtr = gemm::bench::makeAlpakaGemmFunctor({args.deviceKind, args.executor});
+        auto functorPtr = gemm::bench::makeAlpakaGemmFunctor(
+            {args.deviceKind, args.executor, gemm::bench::detail::parseStagingPolicy(args.staging)});
         auto& functor = *functorPtr;
 #endif
         std::cout << "executor=" << functor.executorName() << " api=" << functor.api()

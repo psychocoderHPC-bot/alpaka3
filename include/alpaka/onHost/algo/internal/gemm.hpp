@@ -777,7 +777,8 @@ namespace alpaka::onHost
             GemmNumericMode mode,
             GemmKernel kernel,
             GemmStagingConfig staging,
-            std::optional<GemmPlan> expertOverride)
+            std::optional<GemmPlan> expertOverride,
+            PlanDiagnostics* diagnosticsOut)
         {
             using Api = std::remove_cvref_t<decltype(queue.getApi())>;
             using DeviceKind = std::remove_cvref_t<decltype(queue.getDeviceKind())>;
@@ -840,6 +841,8 @@ namespace alpaka::onHost
 
                     PlanSelection const selection
                         = selectPlan(problem, facts, gemmCandidateFamily<T_Acc, Api, DeviceKind, T_Exec>, request);
+                    if(diagnosticsOut != nullptr)
+                        *diagnosticsOut = selection.diagnostics;
                     dispatchGemmPlan<T_Acc, Api, DeviceKind, T_Exec>(
                         selection.plan,
                         queue,

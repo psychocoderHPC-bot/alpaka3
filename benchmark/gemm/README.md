@@ -129,6 +129,40 @@ kind) exits with an error. Select the backend at configure time as well, for
 example with the root configuration options, and confirm from the printed
 identity line which device actually ran.
 
+## Staging policy and plan reporting
+
+The register-blocked kernel has two operand supply policies. The default is the
+shipped compile-time configuration, so an existing invocation keeps its plan and
+its timings:
+
+```bash
+--staging automatic    # default: resolved by the shipped compile-time policy
+--staging direct       # read A and B from global memory in the K loop
+--staging cooperative  # stage each A/B panel in block-shared memory
+```
+
+`automatic` resolves exactly as before. `direct` and `cooperative` are explicit
+requests to the planner: they select only plans with that policy and never fall
+back to the other one. An explicit `cooperative` request that no legal plan can
+satisfy (for example because the bounded stage ring exceeds the device's
+block-shared memory) exits nonzero and prints the planner's rejection reason
+instead of silently running the direct path.
+
+Every executed case prints one plan line before warm-up and timing:
+
+```text
+plan case=square-64 tileM=8 tileN=8 WR=1 WC=1 BK=16 stages=1 policy=direct simd=8 scratch=0
+```
+
+The same values are recorded in `samples.json` under the record's `plan` object:
+`tile_m`, `tile_n`, `worker_rows`, `worker_cols`, `k_block`, `stages`,
+`policy`, `simd_width` and `scratch_bytes` (the block-shared staging bound, zero
+for a direct plan). They are copied from the planner diagnostics of the actual
+run, so a measurement log always identifies the configuration that produced the
+number. The record's existing `executor`, `api`, `device_kind`, `device_name`
+and `adapter` fields carry the device identity. A case that does not select a
+plan, or an external baseline, has no `plan` object.
+
 ## Plots
 
 ```bash

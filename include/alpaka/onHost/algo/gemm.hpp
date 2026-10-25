@@ -11,6 +11,13 @@
 
 namespace alpaka::onHost
 {
+    /** Planner diagnostics of the selected plan, including the plan fields and the staging scratch bound.
+     *
+     * A caller may pass a pointer to this type to @ref gemm; when the register-blocked path selects a plan the
+     * object is filled from the planner's diagnostics. No value is written for a path that does not select a plan.
+     */
+    using GemmPlanDiagnostics = internal::PlanDiagnostics;
+
     /** Enqueue C := alpha * op(A) * op(B) + beta * C on the given queue.
      *
      * The operation follows the queue's asynchronous semantics: the call only enqueues work and returns. The caller
@@ -58,14 +65,27 @@ namespace alpaka::onHost
         GemmNumericMode mode = GemmNumericMode::fp32,
         GemmKernel kernel = GemmKernel::registerBlocked,
         GemmStagingConfig staging = {},
-        std::optional<GemmPlan> planOverride = std::nullopt)
+        std::optional<GemmPlan> planOverride = std::nullopt,
+        GemmPlanDiagnostics* diagnosticsOut = nullptr)
     {
         static_assert(std::is_arithmetic_v<std::remove_cv_t<T_Alpha>>, "alpha must be an arithmetic scalar");
         static_assert(std::is_arithmetic_v<std::remove_cv_t<T_Beta>>, "beta must be an arithmetic scalar");
 
         if constexpr(exec == alpaka::exec::anyExecutor)
         {
-            gemm(queue, defaultExecutor(queue.getDevice()), c, a, b, alpha, beta, mode, kernel, staging, planOverride);
+            gemm(
+                queue,
+                defaultExecutor(queue.getDevice()),
+                c,
+                a,
+                b,
+                alpha,
+                beta,
+                mode,
+                kernel,
+                staging,
+                planOverride,
+                diagnosticsOut);
         }
         else
         {
@@ -81,7 +101,7 @@ namespace alpaka::onHost
                     std::same_as<CType, T_Acc> && std::same_as<AType, T_AStorage> && std::same_as<BType, T_BStorage>)
                 {
                     internal::executeGemm<
-                        T_Acc>(queue, exec, c, a, b, alpha, beta, mode, kernel, staging, planOverride);
+                        T_Acc>(queue, exec, c, a, b, alpha, beta, mode, kernel, staging, planOverride, diagnosticsOut);
                 }
                 else
                 {
@@ -122,9 +142,22 @@ namespace alpaka::onHost
         GemmNumericMode mode = GemmNumericMode::fp32,
         GemmKernel kernel = GemmKernel::registerBlocked,
         GemmStagingConfig staging = {},
-        std::optional<GemmPlan> planOverride = std::nullopt)
+        std::optional<GemmPlan> planOverride = std::nullopt,
+        GemmPlanDiagnostics* diagnosticsOut = nullptr)
     {
-        gemm(queue, defaultExecutor(queue.getDevice()), c, a, b, alpha, beta, mode, kernel, staging, planOverride);
+        gemm(
+            queue,
+            defaultExecutor(queue.getDevice()),
+            c,
+            a,
+            b,
+            alpha,
+            beta,
+            mode,
+            kernel,
+            staging,
+            planOverride,
+            diagnosticsOut);
     }
 
     /** @} */

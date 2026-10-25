@@ -802,17 +802,27 @@ namespace alpaka::onHost::internal
 
         if(!best.has_value())
         {
+            // Report the rejections of the requested policy, not the expected
+            // "wrong policy" rejection of every candidate of the other policy.
             std::string reason = "GEMM: no legal plan for the problem; first rejections: ";
             std::size_t reported = 0;
-            for(auto const& outcome : selection.diagnostics.candidates)
+            auto const appendRejections = [&](bool onlyRequestedPolicy)
             {
-                if(outcome.legal || reported >= 3u)
-                    continue;
-                if(reported > 0u)
-                    reason += "; ";
-                reason += outcome.reason;
-                ++reported;
-            }
+                for(auto const& outcome : selection.diagnostics.candidates)
+                {
+                    if(outcome.legal || reported >= 3u)
+                        continue;
+                    if(onlyRequestedPolicy && request.policy.has_value() && outcome.plan.policy != *request.policy)
+                        continue;
+                    if(reported > 0u)
+                        reason += "; ";
+                    reason += outcome.reason;
+                    ++reported;
+                }
+            };
+            appendRejections(true);
+            if(reported == 0u)
+                appendRejections(false);
             throw std::invalid_argument(reason);
         }
 

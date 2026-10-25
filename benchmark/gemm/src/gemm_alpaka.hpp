@@ -36,6 +36,7 @@ namespace gemm::bench
     {
         std::string deviceKind{"cpu"};
         std::string executor{};
+        alpaka::onHost::GemmStaging stagingPolicy = alpaka::onHost::GemmStaging::automatic;
     };
 
     namespace detail
@@ -65,6 +66,36 @@ namespace gemm::bench
             return toLower(lhs) == toLower(rhs);
         }
 
+        /** Parse the command-line staging policy. Every other value is rejected, so a typo never silently selects
+         * the default. */
+        [[nodiscard]] inline alpaka::onHost::GemmStaging parseStagingPolicy(std::string_view name)
+        {
+            if(equalsIgnoreCase(name, "automatic"))
+                return alpaka::onHost::GemmStaging::automatic;
+            if(equalsIgnoreCase(name, "direct"))
+                return alpaka::onHost::GemmStaging::direct;
+            if(equalsIgnoreCase(name, "cooperative"))
+                return alpaka::onHost::GemmStaging::cooperative;
+            throw std::runtime_error(
+                "unknown staging policy '" + std::string{name} + "'; expected one of automatic, direct, cooperative");
+        }
+
+        [[nodiscard]] inline char const* stagingPolicyName(alpaka::onHost::GemmStaging policy)
+        {
+            switch(policy)
+            {
+            case alpaka::onHost::GemmStaging::automatic:
+                return "automatic";
+            case alpaka::onHost::GemmStaging::direct:
+                return "direct";
+            case alpaka::onHost::GemmStaging::cooperative:
+                return "cooperative";
+            case alpaka::onHost::GemmStaging::asynchronous:
+                return "asynchronous";
+            }
+            return "unknown";
+        }
+
         /** True when the executor is usable with the concrete device type. */
         template<typename T_Device, typename T_Executor>
         inline constexpr bool executorIsSupported
@@ -89,9 +120,13 @@ namespace gemm::bench
         using Device = T_Device;
         using Executor = T_Executor;
 
-        AlpakaGemmFunctor(Device device, Executor exec)
+        AlpakaGemmFunctor(
+            Device device,
+            Executor exec,
+            alpaka::onHost::GemmStaging stagingPolicy = alpaka::onHost::GemmStaging::automatic)
             : m_device{std::move(device)}
             , m_exec{exec}
+            , m_staging{stagingPolicy, 1u}
             , m_queue{m_device.makeQueue()}
             , m_deviceName{m_device.getName()}
             , m_apiName{m_device.getApi().getName()}
@@ -126,6 +161,11 @@ namespace gemm::bench
             return m_executorName;
         }
 
+        [[nodiscard]] std::optional<PlanSummary> plan() const override
+        {
+            return m_planSummary;
+        }
+
         [[nodiscard]] bool supports(Problem const& problem) const override
         {
             return problem.mode == "fp32" || problem.mode == "fp16_fp32" || problem.mode == "bf16_fp32";
@@ -138,6 +178,11 @@ namespace gemm::bench
 
         void prepare(Problem const& problem) override
         {
+            // The plan belongs to the prepared problem, so never carry one over
+            // from the previous case.
+            m_planCaptured = false;
+            m_planDiagnostics.reset();
+            m_planSummary.reset();
             setStrides(problem);
             if(problem.mode == "fp32")
                 prepareImpl(problem, m_f32.emplace());
@@ -255,6 +300,15 @@ namespace gemm::bench
                 alpaka::onHost::GemmLayout::rowMajor,
                 problem.transpose_b == "transpose" ? alpaka::onHost::GemmOp::transpose : alpaka::onHost::GemmOp::none};
 
+            // Fill the planner diagnostics once per prepared problem. Later
+            // repetitions of the same case pass no output so the timed path
+            // does not pay for copying the diagnostics.
+            alpaka::onHost::GemmPlanDiagnostics* diagnosticsOut = nullptr;
+            if(!m_planCaptured)
+            {
+                m_planDiagnostics.emplace();
+                diagnosticsOut = &*m_planDiagnostics;
+            }
             alpaka::onHost::gemm(
                 m_queue,
                 m_exec,
@@ -263,7 +317,29 @@ namespace gemm::bench
                 viewB,
                 static_cast<T_Output>(problem.alpha),
                 static_cast<T_Output>(problem.beta),
-                mode);
+                mode,
+                alpaka::onHost::GemmKernel::registerBlocked,
+                m_staging,
+                std::nullopt,
+                diagnosticsOut);
+            if(diagnosticsOut != nullptr)
+            {
+                auto const& selected = m_planDiagnostics->selected;
+                // The scale-only and non-candidate paths do not select a plan;
+                // they leave the diagnostics default-constructed.
+                if(selected.tileM != 0u)
+                    m_planSummary = PlanSummary{
+                        selected.tileM,
+                        selected.tileN,
+                        selected.workerRows,
+                        selected.workerCols,
+                        selected.kBlock,
+                        selected.stages,
+                        detail::stagingPolicyName(selected.policy),
+                        selected.simdWidth,
+                        m_planDiagnostics->stagingBytes};
+                m_planCaptured = true;
+            }
             return RunResult{true, {}};
         }
 
@@ -292,6 +368,7 @@ namespace gemm::bench
 
         Device m_device;
         Executor m_exec;
+        alpaka::onHost::GemmStagingConfig m_staging;
         decltype(m_device.makeQueue()) m_queue;
         std::string m_deviceName;
         std::string m_apiName;
@@ -308,6 +385,9 @@ namespace gemm::bench
         std::optional<Buffers<float, float>> m_f32;
         std::optional<Buffers<alpaka::Float16, float>> m_f16;
         std::optional<Buffers<alpaka::BFloat16, float>> m_bf16;
+        bool m_planCaptured{false};
+        std::optional<alpaka::onHost::GemmPlanDiagnostics> m_planDiagnostics;
+        std::optional<PlanSummary> m_planSummary;
     };
 
     namespace detail
@@ -345,7 +425,10 @@ namespace gemm::bench
                         return;
                     if(!request.executor.empty() && !equalsIgnoreCase(request.executor, Executor::getName()))
                         return;
-                    functor = std::make_unique<AlpakaGemmFunctor<T_Device, Executor>>(std::move(device), exec);
+                    functor = std::make_unique<AlpakaGemmFunctor<T_Device, Executor>>(
+                        std::move(device),
+                        exec,
+                        request.stagingPolicy);
                 }
             };
             std::apply([&](auto... exec) { (tryExecutor(exec), ...); }, alpaka::exec::enabledExecutors);

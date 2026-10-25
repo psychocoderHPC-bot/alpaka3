@@ -8,6 +8,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <string_view>
 
@@ -33,6 +34,23 @@ namespace gemm::bench
         {
             return 2.0 * static_cast<double>(m) * static_cast<double>(n) * static_cast<double>(k);
         }
+    };
+
+    // Selected GEMM plan recorded next to the timing samples. The values are
+    // copied from the planner diagnostics of the run; the harness never
+    // re-derives them. Scratch bytes is the block-shared staging bound, zero
+    // for a direct plan.
+    struct PlanSummary
+    {
+        std::uint32_t tileM{};
+        std::uint32_t tileN{};
+        std::uint32_t workerRows{};
+        std::uint32_t workerCols{};
+        std::uint32_t kBlock{};
+        std::uint32_t stages{};
+        std::string policy{};
+        std::uint32_t simdWidth{};
+        std::uint64_t scratchBytes{};
     };
 
     struct RunResult
@@ -80,6 +98,14 @@ namespace gemm::bench
         [[nodiscard]] virtual std::string_view executorName() const
         {
             return {};
+        }
+
+        // Plan the adapter actually selected for the prepared problem. Empty
+        // when the adapter has no plan (external baseline) or has not executed
+        // a plan-selecting run yet.
+        [[nodiscard]] virtual std::optional<PlanSummary> plan() const
+        {
+            return std::nullopt;
         }
 
         // Return false when the functor cannot run this precision, layout, or
