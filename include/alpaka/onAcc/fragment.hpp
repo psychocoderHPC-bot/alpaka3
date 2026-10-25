@@ -169,7 +169,65 @@ namespace alpaka::onAcc::fragment
                                     && std::same_as<typename std::remove_cvref_t<T_Var>::value_type, T_Element>
                                     && (std::remove_cvref_t<T_Var>::numSlotsPerWorker >= T_Layout::storageElements)
                                     && (T_Layout::width > 0u);
+
+        /** Whether an operation argument is explicitly marked as host-only.
+         *
+         * The device overloads of the fragment operations are annotated for accelerator compilation. A host view or a
+         * host-only functor must therefore never be instantiated for the device pass: their `at()` or call operator
+         * may call host-only code. Such arguments opt out by carrying `static constexpr bool fragmentHostOnly = true`,
+         * which @ref fragment::hostOnly() adds to a view or callable. Arguments without the marker are treated as
+         * accessible from the accelerator.
+         */
+        template<typename T>
+        concept hostOnlyOperation = requires { requires std::remove_cvref_t<T>::fragmentHostOnly; };
     } // namespace internal
+
+    /** Explicitly mark a view or callable as host-only.
+     *
+     * The wrapper forwards `at()` and the call operator and carries the host-only marker read by the fragment
+     * operations. Use it for host-side test views and report-only functors, which must not be instantiated for the
+     * device compilation pass.
+     */
+    template<typename T>
+    struct HostOnly
+    {
+        T value;
+
+        static constexpr bool fragmentHostOnly = true;
+
+        template<typename... T_Args>
+        ALPAKA_FN_HOST constexpr decltype(auto) operator()(T_Args&&... args)
+        {
+            return value(ALPAKA_FORWARD(args)...);
+        }
+
+        template<typename... T_Args>
+        ALPAKA_FN_HOST constexpr decltype(auto) operator()(T_Args&&... args) const
+        {
+            return value(ALPAKA_FORWARD(args)...);
+        }
+
+        template<typename... T_Args>
+        ALPAKA_FN_HOST constexpr decltype(auto) at(T_Args&&... args)
+        {
+            return value.at(ALPAKA_FORWARD(args)...);
+        }
+
+        template<typename... T_Args>
+        ALPAKA_FN_HOST constexpr decltype(auto) at(T_Args&&... args) const
+        {
+            return value.at(ALPAKA_FORWARD(args)...);
+        }
+    };
+
+    template<typename T>
+    HostOnly(T&&) -> HostOnly<std::decay_t<T>>;
+
+    template<typename T>
+    ALPAKA_FN_HOST constexpr auto hostOnly(T&& value)
+    {
+        return HostOnly<std::decay_t<T>>{ALPAKA_FORWARD(value)};
+    }
 
     /** Ownership of a register-blocked tile inside a block tile of WR x WC worker stripes.
      *
@@ -308,7 +366,26 @@ namespace alpaka::onAcc::fragment
          * coordinates outside the logical tile are never visited.
          */
         template<typename T_Fn>
+        requires(!internal::hostOnlyOperation<T_Fn>)
         ALPAKA_FN_INLINE ALPAKA_FN_ACC constexpr void concurrent(T_Fn&& fn) const
+        {
+            for(uint32_t slot = 0u; slot < T_Layout::slotCount; ++slot)
+                for(uint32_t lane = 0u; lane < T_Layout::width; ++lane)
+                    if(T_Layout::laneOwned(slot, lane))
+                    {
+                        auto const global = ownership.globalCoord(slot, lane);
+                        fn(global, data[slot * T_Layout::width + lane]);
+                    }
+        }
+
+        /** Host-only overload of @ref concurrent for callables marked with @ref hostOnly().
+         *
+         * The body is identical but is a plain host function, so a host-only functor is never instantiated for the
+         * device compilation pass.
+         */
+        template<typename T_Fn>
+        requires internal::hostOnlyOperation<T_Fn>
+        ALPAKA_FN_INLINE ALPAKA_FN_HOST constexpr void concurrent(T_Fn&& fn) const
         {
             for(uint32_t slot = 0u; slot < T_Layout::slotCount; ++slot)
                 for(uint32_t lane = 0u; lane < T_Layout::width; ++lane)
@@ -363,7 +440,25 @@ namespace alpaka::onAcc::fragment
          * Coordinates are tested before the view is dereferenced.
          */
         template<typename T_View>
+        requires(!internal::hostOnlyOperation<T_View>)
         ALPAKA_FN_INLINE ALPAKA_FN_ACC constexpr void loadFrom(T_View const& view, uint64_t totalM, uint64_t totalN)
+            const
+        {
+            for(uint32_t slot = 0u; slot < T_Layout::slotCount; ++slot)
+                for(uint32_t lane = 0u; lane < T_Layout::width; ++lane)
+                {
+                    auto const global = ownership.globalCoord(slot, lane);
+                    T value{0};
+                    if(T_Layout::laneOwned(slot, lane) && global.m < totalM && global.n < totalN)
+                        value = static_cast<T>(view.at(global.m, global.n));
+                    data[slot * T_Layout::width + lane] = value;
+                }
+        }
+
+        /** Host-only overload of @ref loadFrom for views marked with @ref hostOnly(). */
+        template<typename T_View>
+        requires internal::hostOnlyOperation<T_View>
+        ALPAKA_FN_INLINE ALPAKA_FN_HOST constexpr void loadFrom(T_View const& view, uint64_t totalM, uint64_t totalN)
             const
         {
             for(uint32_t slot = 0u; slot < T_Layout::slotCount; ++slot)
@@ -383,7 +478,27 @@ namespace alpaka::onAcc::fragment
          * Out-of-range coordinates are not stored. Padded lanes are never stored.
          */
         template<typename T_View, typename T_Fn>
+        requires(!internal::hostOnlyOperation<T_View> && !internal::hostOnlyOperation<T_Fn>)
         ALPAKA_FN_INLINE ALPAKA_FN_ACC constexpr void storeTo(
+            T_View& view,
+            T_Fn&& fn,
+            uint64_t totalM,
+            uint64_t totalN) const
+        {
+            for(uint32_t slot = 0u; slot < T_Layout::slotCount; ++slot)
+                for(uint32_t lane = 0u; lane < T_Layout::width; ++lane)
+                    if(T_Layout::laneOwned(slot, lane))
+                    {
+                        auto const global = ownership.globalCoord(slot, lane);
+                        if(global.m < totalM && global.n < totalN)
+                            view.at(global.m, global.n) = fn(global, data[slot * T_Layout::width + lane]);
+                    }
+        }
+
+        /** Host-only overload of @ref storeTo for views or callables marked with @ref hostOnly(). */
+        template<typename T_View, typename T_Fn>
+        requires(internal::hostOnlyOperation<T_View> || internal::hostOnlyOperation<T_Fn>)
+        ALPAKA_FN_INLINE ALPAKA_FN_HOST constexpr void storeTo(
             T_View& view,
             T_Fn&& fn,
             uint64_t totalM,

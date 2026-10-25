@@ -142,13 +142,14 @@ TEST_CASE("gemm fragment operations stay inside worker storage", "[gemm][fragmen
     tile.fill(1.5f);
     std::size_t visited = 0u;
     tile.concurrent(
-        [&](auto const& global, float& value)
-        {
-            CHECK((global.m >= 10u + 3u && global.m < 10u + 6u));
-            CHECK((global.n >= 20u + 10u && global.n < 20u + 15u));
-            CHECK(value == 1.5f);
-            ++visited;
-        });
+        fragment::hostOnly(
+            [&](auto const& global, float& value)
+            {
+                CHECK((global.m >= 10u + 3u && global.m < 10u + 6u));
+                CHECK((global.n >= 20u + 10u && global.n < 20u + 15u));
+                CHECK(value == 1.5f);
+                ++visited;
+            }));
     CHECK(visited == static_cast<std::size_t>(Layout::tileM) * Layout::tileN);
 
     tile.row(1).at(4) = 7.0f;
@@ -163,15 +164,16 @@ TEST_CASE("gemm fragment operations stay inside worker storage", "[gemm][fragmen
     // loadFrom/storeTo exercise guarded global access.
     std::vector<float> global(32u * 32u, 0.0f);
     HostView<float> view{global.data(), 32u};
-    tile.loadFrom(view, 32u, 32u);
+    auto hostView = fragment::hostOnly(view);
+    tile.loadFrom(hostView, 32u, 32u);
     CHECK(tile.column(0).at(0) == 0.0f);
     tile.fill(2.0f);
-    tile.storeTo(view, [](auto const&, float value) { return value + 1.0f; }, 32u, 32u);
+    tile.storeTo(hostView, fragment::hostOnly([](auto const&, float value) { return value + 1.0f; }), 32u, 32u);
     CHECK(global[(10u + 3u) * 32u + (20u + 10u)] == 3.0f);
 
     // Coordinates outside the total view are neither read nor written.
     tile.fill(9.0f);
-    tile.storeTo(view, [](auto const&, float value) { return value; }, 11u, 31u);
+    tile.storeTo(hostView, fragment::hostOnly([](auto const&, float value) { return value; }), 11u, 31u);
     CHECK(global[(10u + 3u) * 32u + (20u + 10u)] == 3.0f);
 }
 
