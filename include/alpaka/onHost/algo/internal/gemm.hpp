@@ -547,6 +547,66 @@ namespace alpaka::onHost
             launch(regions.corner);
         }
 
+        /** Try one compile-time family member and launch it when it matches the runtime plan.
+         *
+         * This is a named function template rather than a lambda because nvcc's CUDA front end does not expand a
+         * function parameter pack that is captured by a lambda and then expanded inside a nested lambda; the pack
+         * loses its pack identity and @c std::forward receives the whole captured pack.
+         */
+        template<
+            std::size_t T_Index,
+            typename T_Acc,
+            typename T_Api,
+            typename T_DeviceKind,
+            typename T_Exec,
+            typename... T_Args>
+        bool tryDispatchGemmPlan(GemmPlan const& plan, T_Args&&... args)
+        {
+            constexpr GemmPlan candidate = gemmCandidateFamily<T_Acc, T_Api, T_DeviceKind, T_Exec>.candidates[T_Index];
+            if(plan != candidate)
+                return false;
+            if constexpr(candidate.policy == GemmStaging::cooperative)
+            {
+                launchGemmTilesRegisterBlocked<
+                    candidate.threadM,
+                    candidate.threadN,
+                    candidate.workerRows,
+                    candidate.workerCols,
+                    candidate.kBlock,
+                    candidate.stages,
+                    candidate.threadCount,
+                    T_Acc>(ALPAKA_FORWARD(args)...);
+            }
+            else
+            {
+                launchGemmTilesRegisterBlocked<
+                    candidate.threadM,
+                    candidate.threadN,
+                    candidate.workerRows,
+                    candidate.workerCols,
+                    candidate.kBlock,
+                    0u,
+                    candidate.threadCount,
+                    T_Acc>(ALPAKA_FORWARD(args)...);
+            }
+            return true;
+        }
+
+        /** Visit the candidate family in order and stop at the first matching plan. */
+        template<
+            typename T_Acc,
+            typename T_Api,
+            typename T_DeviceKind,
+            typename T_Exec,
+            std::size_t... T_Index,
+            typename... T_Args>
+        bool tryDispatchGemmPlans(std::index_sequence<T_Index...>, GemmPlan const& plan, T_Args&&... args)
+        {
+            return (
+                tryDispatchGemmPlan<T_Index, T_Acc, T_Api, T_DeviceKind, T_Exec>(plan, ALPAKA_FORWARD(args)...)
+                || ...);
+        }
+
         /** Dispatch the selected plan onto the compiled kernel family.
          *
          * Every family member is instantiated once per accumulator type, target and executor. The runtime plan is
@@ -557,43 +617,10 @@ namespace alpaka::onHost
         template<typename T_Acc, typename T_Api, typename T_DeviceKind, typename T_Exec, typename... T_Args>
         void dispatchGemmPlan(GemmPlan const& plan, T_Args&&... args)
         {
-            bool dispatched = false;
-            [&]<std::size_t... T_Index>(std::index_sequence<T_Index...>)
-            {
-                auto const tryAt = [&]<std::size_t T_I>()
-                {
-                    constexpr GemmPlan candidate
-                        = gemmCandidateFamily<T_Acc, T_Api, T_DeviceKind, T_Exec>.candidates[T_I];
-                    if(plan != candidate)
-                        return false;
-                    if constexpr(candidate.policy == GemmStaging::cooperative)
-                    {
-                        launchGemmTilesRegisterBlocked<
-                            candidate.threadM,
-                            candidate.threadN,
-                            candidate.workerRows,
-                            candidate.workerCols,
-                            candidate.kBlock,
-                            candidate.stages,
-                            candidate.threadCount,
-                            T_Acc>(std::forward<T_Args>(args)...);
-                    }
-                    else
-                    {
-                        launchGemmTilesRegisterBlocked<
-                            candidate.threadM,
-                            candidate.threadN,
-                            candidate.workerRows,
-                            candidate.workerCols,
-                            candidate.kBlock,
-                            0u,
-                            candidate.threadCount,
-                            T_Acc>(std::forward<T_Args>(args)...);
-                    }
-                    return true;
-                };
-                ((dispatched = dispatched || tryAt.template operator()<T_Index>()), ...);
-            }(std::make_index_sequence<gemmCandidateFamily<T_Acc, T_Api, T_DeviceKind, T_Exec>.size>{});
+            bool const dispatched = tryDispatchGemmPlans<T_Acc, T_Api, T_DeviceKind, T_Exec>(
+                std::make_index_sequence<gemmCandidateFamily<T_Acc, T_Api, T_DeviceKind, T_Exec>.size>{},
+                plan,
+                ALPAKA_FORWARD(args)...);
             if(!dispatched)
                 throw std::invalid_argument("GEMM: selected plan is not part of the compiled candidate family");
         }
