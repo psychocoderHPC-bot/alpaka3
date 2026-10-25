@@ -52,11 +52,7 @@ namespace
         Op op = Op::none;
         std::vector<T> storage;
 
-        HostMatrix(
-            std::size_t rowsIn,
-            std::size_t colsIn,
-            Layout layoutIn = Layout::rowMajor,
-            std::size_t pad = 0)
+        HostMatrix(std::size_t rowsIn, std::size_t colsIn, Layout layoutIn = Layout::rowMajor, std::size_t pad = 0)
             : rows(rowsIn)
             , cols(colsIn)
             , ld((layoutIn == Layout::rowMajor ? colsIn : rowsIn) + pad)
@@ -71,7 +67,7 @@ namespace
             return {storage.data(), rows, cols, ld, layout, op};
         }
 
-        [[nodiscard]] MatrixView<const T> view() const
+        [[nodiscard]] MatrixView<T const> view() const
         {
             return {storage.data(), rows, cols, ld, layout, op};
         }
@@ -107,10 +103,9 @@ namespace
     {
         INFO(
             label << ": informative=" << report.informative << " operations=" << report.operations
-                  << " maxAbsError=" << static_cast<double>(report.maxAbsError)
-                  << " maxScaledError=" << static_cast<double>(report.maxScaledError)
-                  << " maxBound=" << static_cast<double>(report.maxBound) << " worst=(" << report.worstErrorI << ","
-                  << report.worstErrorJ << ")"
+                  << " maxAbsError=" << static_cast<double>(report.maxAbsError) << " maxScaledError="
+                  << static_cast<double>(report.maxScaledError) << " maxBound=" << static_cast<double>(report.maxBound)
+                  << " worst=(" << report.worstErrorI << "," << report.worstErrorJ << ")"
                   << " worstScaled=(" << report.worstScaledI << "," << report.worstScaledJ << ")");
         REQUIRE(report.informative);
         REQUIRE(report.withinBound);
@@ -139,21 +134,10 @@ namespace
         gemm_reference<double>(reference.view(), a.view(), b.view(), alpha, beta);
         gemm_reference<float>(candidate.view(), a.view(), b.view(), alpha, beta);
 
-        auto const model = makeToleranceModel(
-            NumericMode::fp32,
-            a.view().logicalCols(),
-            alpha != 0.0f,
-            beta != 0.0f,
-            beta == 1.0f);
-        auto const report = compareGemm(
-            model,
-            candidate.view(),
-            reference.view(),
-            a.view(),
-            b.view(),
-            cOld.view(),
-            alpha,
-            beta);
+        auto const model
+            = makeToleranceModel(NumericMode::fp32, a.view().logicalCols(), alpha != 0.0f, beta != 0.0f, beta == 1.0f);
+        auto const report
+            = compareGemm(model, candidate.view(), reference.view(), a.view(), b.view(), cOld.view(), alpha, beta);
         requireWithin(report, label);
     }
 
@@ -174,7 +158,7 @@ TEST_CASE("gemm: reference GEMM agrees with the FP64 reference on small shapes a
                             for(auto opA : operations)
                                 for(auto opB : operations)
                                 {
-                                    Rng rng(0x9e3779b97f4a7c15ULL * (m * 100 + n * 10 + k) + static_cast<int>(opA));
+                                    Rng rng(0x9e37'79b9'7f4a'7c15ULL * (m * 100 + n * 10 + k) + static_cast<int>(opA));
                                     std::size_t const storedRowsA = opA == Op::none ? m : k;
                                     std::size_t const storedColsA = opA == Op::none ? k : m;
                                     std::size_t const storedRowsB = opB == Op::none ? k : n;
@@ -190,8 +174,8 @@ TEST_CASE("gemm: reference GEMM agrees with the FP64 reference on small shapes a
                                     b.op = opB;
 
                                     checkFp32Case(
-                                        "small-shape m=" + std::to_string(m) + " n=" + std::to_string(n) + " k="
-                                            + std::to_string(k),
+                                        "small-shape m=" + std::to_string(m) + " n=" + std::to_string(n)
+                                            + " k=" + std::to_string(k),
                                         a,
                                         b,
                                         cOld,
@@ -204,14 +188,14 @@ TEST_CASE("gemm: reference GEMM follows the zero-size and read-elision contract"
 {
     SECTION("M=0 and N=0 are no-ops")
     {
-        MatrixView<const float> emptyA{nullptr, 0, 3, 3, Layout::rowMajor, Op::none};
-        MatrixView<const float> emptyB{nullptr, 3, 4, 4, Layout::rowMajor, Op::none};
+        MatrixView<float const> emptyA{nullptr, 0, 3, 3, Layout::rowMajor, Op::none};
+        MatrixView<float const> emptyB{nullptr, 3, 4, 4, Layout::rowMajor, Op::none};
         HostMatrix<float> c(0, 4);
         gemm_reference<double>(c.view(), emptyA, emptyB, 2.0f, 3.0f);
         REQUIRE(c.storage.size() == 1);
 
-        MatrixView<const float> aNull{nullptr, 3, 2, 2, Layout::rowMajor, Op::none};
-        MatrixView<const float> bNull{nullptr, 2, 0, 0, Layout::rowMajor, Op::none};
+        MatrixView<float const> aNull{nullptr, 3, 2, 2, Layout::rowMajor, Op::none};
+        MatrixView<float const> bNull{nullptr, 2, 0, 0, Layout::rowMajor, Op::none};
         HostMatrix<float> cZeroCols(3, 0);
         gemm_reference<double>(cZeroCols.view(), aNull, bNull, 2.0f, 3.0f);
         REQUIRE(cZeroCols.storage.size() == 1);
@@ -224,8 +208,8 @@ TEST_CASE("gemm: reference GEMM follows the zero-size and read-elision contract"
             c.storage[i] = 0.25f * static_cast<float>(i + 1);
         HostMatrix<float> const old = c;
 
-        MatrixView<const float> aNull{nullptr, 2, 0, 0, Layout::rowMajor, Op::none};
-        MatrixView<const float> bNull{nullptr, 0, 3, 3, Layout::rowMajor, Op::none};
+        MatrixView<float const> aNull{nullptr, 2, 0, 0, Layout::rowMajor, Op::none};
+        MatrixView<float const> bNull{nullptr, 0, 3, 3, Layout::rowMajor, Op::none};
         gemm_reference<double>(c.view(), aNull, bNull, 2.0f, 3.0f);
 
         for(std::size_t j = 0; j < 3; ++j)
@@ -239,8 +223,8 @@ TEST_CASE("gemm: reference GEMM follows the zero-size and read-elision contract"
         Rng alphaZeroRng(11);
         fillRandom(c, alphaZeroRng, -0.5f, 0.5f);
         HostMatrix<float> const old = c;
-        MatrixView<const float> aNull{nullptr, 2, 4, 0, Layout::rowMajor, Op::none};
-        MatrixView<const float> bNull{nullptr, 4, 3, 3, Layout::rowMajor, Op::none};
+        MatrixView<float const> aNull{nullptr, 2, 4, 0, Layout::rowMajor, Op::none};
+        MatrixView<float const> bNull{nullptr, 4, 3, 3, Layout::rowMajor, Op::none};
 
         gemm_reference<double>(c.view(), aNull, bNull, 0.0f, -0.5f);
         for(std::size_t i = 0; i < c.storage.size(); ++i)
@@ -267,16 +251,15 @@ TEST_CASE("gemm: reference GEMM follows the zero-size and read-elision contract"
                 REQUIRE(std::isfinite(c.view().stored(i, j)));
             }
 
-        auto const report
-            = compareGemm(
-                makeToleranceModel(NumericMode::fp32, 4, true, false),
-                c.view(),
-                reference.view(),
-                a.view(),
-                b.view(),
-                MatrixView<const float>{},
-                1.25f,
-                0.0f);
+        auto const report = compareGemm(
+            makeToleranceModel(NumericMode::fp32, 4, true, false),
+            c.view(),
+            reference.view(),
+            a.view(),
+            b.view(),
+            MatrixView<float const>{},
+            1.25f,
+            0.0f);
         requireWithin(report, "beta=0 with a NaN old C");
     }
 
@@ -287,12 +270,12 @@ TEST_CASE("gemm: reference GEMM follows the zero-size and read-elision contract"
         c.view().stored(0, 1) = std::numeric_limits<float>::quiet_NaN();
         c.view().stored(1, 0) = std::numeric_limits<float>::denorm_min();
         c.view().stored(1, 1) = 7.5f;
-        auto const bits = [&](std::size_t i, std::size_t j)
-        { return std::bit_cast<std::uint32_t>(c.view().stored(i, j)); };
+        auto const bits
+            = [&](std::size_t i, std::size_t j) { return std::bit_cast<std::uint32_t>(c.view().stored(i, j)); };
         auto const before = std::array<std::uint32_t, 4>{bits(0, 0), bits(0, 1), bits(1, 0), bits(1, 1)};
 
-        MatrixView<const float> aNull{nullptr, 2, 0, 0, Layout::rowMajor, Op::none};
-        MatrixView<const float> bNull{nullptr, 0, 2, 2, Layout::rowMajor, Op::none};
+        MatrixView<float const> aNull{nullptr, 2, 0, 0, Layout::rowMajor, Op::none};
+        MatrixView<float const> bNull{nullptr, 0, 2, 2, Layout::rowMajor, Op::none};
         gemm_reference<double>(c.view(), aNull, bNull, 3.0f, 1.0f);
 
         REQUIRE(bits(0, 0) == before[0]);
@@ -322,9 +305,7 @@ TEST_CASE("gemm: reference GEMM rejects inconsistent dimensions and strides", "[
 
     auto transposedOutput = c.view();
     transposedOutput.op = Op::transpose;
-    REQUIRE_THROWS_AS(
-        gemm_reference<double>(transposedOutput, a.view(), b.view(), 1.0f, 0.0f),
-        std::invalid_argument);
+    REQUIRE_THROWS_AS(gemm_reference<double>(transposedOutput, a.view(), b.view(), 1.0f, 0.0f), std::invalid_argument);
 }
 
 TEST_CASE("gemm: reference GEMM is exact on identity, diagonal and rank-one patterns", "[gemm][numerics]")
@@ -493,15 +474,8 @@ TEST_CASE("gemm: tolerance model passes inside the bound and rejects beyond it",
             candidate.view().stored(i, j) = static_cast<float>(reference.view().stored(i, j));
 
     auto const model = makeToleranceModel(NumericMode::fp32, 8, true, true);
-    auto const baseline = compareGemm(
-        model,
-        candidate.view(),
-        reference.view(),
-        a.view(),
-        b.view(),
-        cOld.view(),
-        2.0f,
-        0.5f);
+    auto const baseline
+        = compareGemm(model, candidate.view(), reference.view(), a.view(), b.view(), cOld.view(), 2.0f, 0.5f);
     requireWithin(baseline, "rounded reference candidate");
 
     std::size_t const i = baseline.maxBoundI;
@@ -575,8 +549,15 @@ TEST_CASE("gemm: output conversion is part of the bound", "[gemm][numerics]")
             candidate.view().stored(i, j) = static_cast<float>(reference.view().stored(i, j));
 
     auto const model = makeToleranceModel(NumericMode::fp32, 12, true, false, false, true);
-    auto const report
-        = compareGemm(model, candidate.view(), reference.view(), a.view(), b.view(), MatrixView<const float>{}, 1.0f, 0.0f);
+    auto const report = compareGemm(
+        model,
+        candidate.view(),
+        reference.view(),
+        a.view(),
+        b.view(),
+        MatrixView<float const>{},
+        1.0f,
+        0.0f);
     requireWithin(report, "double accumulator stored to float");
 }
 
@@ -634,10 +615,9 @@ TEST_CASE("gemm: FP16 and BF16 storage paths separate quantization from accumula
             bQ.view(),
             1.0f);
         INFO(
-            "fp16 input quantization: maxAbsError=" << static_cast<double>(quantization.maxAbsError)
-                                                   << " maxBound=" << static_cast<double>(quantization.maxBound)
-                                                   << " worst=(" << quantization.worstI << ","
-                                                   << quantization.worstJ << ")");
+            "fp16 input quantization: maxAbsError=" << static_cast<double>(quantization.maxAbsError) << " maxBound="
+                                                    << static_cast<double>(quantization.maxBound) << " worst=("
+                                                    << quantization.worstI << "," << quantization.worstJ << ")");
         REQUIRE(quantization.withinBound);
         REQUIRE(quantization.maxAbsError > 0.0L);
     }
@@ -677,7 +657,7 @@ TEST_CASE("gemm: FP16 and BF16 storage paths separate quantization from accumula
             1.0f);
         INFO(
             "bf16 input quantization: maxAbsError=" << static_cast<double>(quantization.maxAbsError)
-                                                   << " maxBound=" << static_cast<double>(quantization.maxBound));
+                                                    << " maxBound=" << static_cast<double>(quantization.maxBound));
         REQUIRE(quantization.withinBound);
         REQUIRE(quantization.maxAbsError > 0.0L);
     }
@@ -745,7 +725,7 @@ TEST_CASE("gemm: n*u >= 1 is reported as uninformative and validated by exact da
         reference.view(),
         a.view(),
         b.view(),
-        MatrixView<const float>{},
+        MatrixView<float const>{},
         1.0f,
         0.0f);
     REQUIRE_FALSE(report.informative);
@@ -782,9 +762,9 @@ TEST_CASE("gemm: seeds reproduce reference results bit for bit", "[gemm][numeric
         REQUIRE(std::bit_cast<std::uint32_t>(first.storage[i]) == std::bit_cast<std::uint32_t>(second.storage[i]));
     bool anyDifferent = false;
     for(std::size_t i = 0; i < first.storage.size(); ++i)
-        anyDifferent = anyDifferent
-                    || std::bit_cast<std::uint32_t>(first.storage[i])
-                           != std::bit_cast<std::uint32_t>(different.storage[i]);
+        anyDifferent
+            = anyDifferent
+              || std::bit_cast<std::uint32_t>(first.storage[i]) != std::bit_cast<std::uint32_t>(different.storage[i]);
     REQUIRE(anyDifferent);
 }
 

@@ -157,8 +157,7 @@ namespace alpaka::validation::gemm
         {
             // Each of the n roundings can hide an underflowed term of up to
             // 0.5 denorm_min; one extra floor covers the final store.
-            auto const floor = (static_cast<long double>(effectiveOperationCount()) + 1.0L)
-                             * absoluteFloor<OutT>();
+            auto const floor = (static_cast<long double>(effectiveOperationCount()) + 1.0L) * absoluteFloor<OutT>();
             return safetyFactor * gamma() * scale + floor;
         }
 
@@ -249,14 +248,7 @@ namespace alpaka::validation::gemm
      * read when beta is nonzero, matching the reference's zero-size contract.
      * ``referenceValue()`` is applied to the operands only, not to C.
      */
-    template<
-        typename OutT,
-        typename RefT,
-        typename AT,
-        typename BT,
-        typename CT,
-        typename AlphaT,
-        typename BetaT>
+    template<typename OutT, typename RefT, typename AT, typename BT, typename CT, typename AlphaT, typename BetaT>
     ComparisonReport compareGemm(
         ToleranceModel const& model,
         MatrixView<OutT> candidate,
@@ -283,7 +275,6 @@ namespace alpaka::validation::gemm
             return {};
 
         bool const betaIsZero = beta == BetaT(0);
-        bool const betaIsOne = beta == BetaT(1);
 
         ComparisonReport report;
         report.operations = model.effectiveOperationCount();
@@ -299,19 +290,19 @@ namespace alpaka::validation::gemm
                 for(std::size_t kk = 0; kk < k; ++kk)
                 {
                     products += detail::magnitude(detail::asLongDouble(a.at(i, kk)))
-                              * detail::magnitude(detail::asLongDouble(b.at(kk, j)));
+                                * detail::magnitude(detail::asLongDouble(b.at(kk, j)));
                 }
 
                 long double scale = detail::magnitude(static_cast<long double>(alpha)) * products;
                 if(!betaIsZero)
                     scale += detail::magnitude(static_cast<long double>(beta))
-                           * detail::magnitude(static_cast<long double>(cOld.at(i, j)));
+                             * detail::magnitude(static_cast<long double>(cOld.at(i, j)));
 
                 long double const bound = model.template elementBound<OutT>(scale);
                 long double const error = detail::difference(reference.stored(i, j), candidate.stored(i, j));
-                long double const scaled
-                    = scale > 0.0L ? error / scale
-                                   : (error == 0.0L ? 0.0L : std::numeric_limits<long double>::infinity());
+                long double const scaled = scale > 0.0L
+                                               ? error / scale
+                                               : (error == 0.0L ? 0.0L : std::numeric_limits<long double>::infinity());
 
                 if(error > report.maxAbsError)
                 {
@@ -361,13 +352,7 @@ namespace alpaka::validation::gemm
      * references use the same C. Accumulation error is not part of this
      * quantity; compare it separately with ``compareGemm``.
      */
-    template<
-        typename ResultT,
-        typename AT,
-        typename AQT,
-        typename BT,
-        typename BQT,
-        typename AlphaT>
+    template<typename ResultT, typename AT, typename AQT, typename BT, typename BQT, typename AlphaT>
     QuantizationReport compareInputQuantization(
         MatrixView<ResultT> originalReference,
         MatrixView<ResultT> quantizedReference,
@@ -402,7 +387,7 @@ namespace alpaka::validation::gemm
                     long double const bo = detail::asLongDouble(bOriginal.at(kk, j));
                     long double const bq = detail::asLongDouble(bQuantized.at(kk, j));
                     bound += detail::magnitude(ao) * detail::magnitude(bo - bq)
-                           + detail::magnitude(bq) * detail::magnitude(ao - aq);
+                             + detail::magnitude(bq) * detail::magnitude(ao - aq);
                 }
                 bound *= detail::magnitude(static_cast<long double>(alpha)) * safetyFactor;
                 bound += ToleranceModel::template absoluteFloor<ResultT>();

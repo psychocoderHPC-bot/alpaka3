@@ -43,7 +43,7 @@ namespace
 {
     std::uint64_t nextRandom(std::uint64_t& state)
     {
-        state = state * 6364136223846793005ULL + 1442695040888963407ULL;
+        state = state * 6'364'136'223'846'793'005ULL + 1'442'695'040'888'963'407ULL;
         return state;
     }
 
@@ -97,7 +97,7 @@ namespace
             return {storage.data(), rows, cols, ld, layout, op};
         }
 
-        [[nodiscard]] gemm::MatrixView<const T> view() const
+        [[nodiscard]] gemm::MatrixView<T const> view() const
         {
             return {storage.data(), rows, cols, ld, layout, op};
         }
@@ -124,21 +124,136 @@ namespace
 int main()
 {
     Case const cases[] = {
-        {"tiny-1x1x1", 1, 1, 1, gemm::Layout::rowMajor, gemm::Layout::rowMajor, gemm::Layout::rowMajor, gemm::Op::none, gemm::Op::none, 0, 0, 0, 1.0f, 0.0f},
-        {"square-8", 8, 8, 8, gemm::Layout::rowMajor, gemm::Layout::rowMajor, gemm::Layout::rowMajor, gemm::Op::none, gemm::Op::none, 2, 3, 1, 1.0f, 0.0f},
-        {"rect-16x32x7-NT", 16, 32, 7, gemm::Layout::rowMajor, gemm::Layout::colMajor, gemm::Layout::rowMajor, gemm::Op::none, gemm::Op::transpose, 1, 2, 0, 1.0f, 0.0f},
-        {"rect-31x17x33-TN", 31, 17, 33, gemm::Layout::colMajor, gemm::Layout::rowMajor, gemm::Layout::colMajor, gemm::Op::transpose, gemm::Op::none, 2, 1, 2, -1.25f, 0.5f},
-        {"rect-64x48x33-TT", 64, 48, 33, gemm::Layout::rowMajor, gemm::Layout::rowMajor, gemm::Layout::rowMajor, gemm::Op::transpose, gemm::Op::transpose, 3, 3, 2, 0.5f, -2.0f},
-        {"skinny-7x5x3-colA", 7, 5, 3, gemm::Layout::colMajor, gemm::Layout::rowMajor, gemm::Layout::rowMajor, gemm::Op::none, gemm::Op::none, 4, 1, 0, 2.0f, 1.0f},
-        {"padded-33x9x17", 33, 9, 17, gemm::Layout::colMajor, gemm::Layout::colMajor, gemm::Layout::colMajor, gemm::Op::none, gemm::Op::transpose, 5, 2, 3, 1.0f, 0.25f},
-        {"k-zero-5x4", 5, 4, 0, gemm::Layout::rowMajor, gemm::Layout::rowMajor, gemm::Layout::rowMajor, gemm::Op::none, gemm::Op::none, 0, 0, 0, 1.0f, 2.0f},
-        {"m-zero-0x4", 0, 4, 3, gemm::Layout::rowMajor, gemm::Layout::rowMajor, gemm::Layout::rowMajor, gemm::Op::none, gemm::Op::none, 0, 0, 0, 1.0f, 2.0f},
+        {"tiny-1x1x1",
+         1,
+         1,
+         1,
+         gemm::Layout::rowMajor,
+         gemm::Layout::rowMajor,
+         gemm::Layout::rowMajor,
+         gemm::Op::none,
+         gemm::Op::none,
+         0,
+         0,
+         0,
+         1.0f,
+         0.0f},
+        {"square-8",
+         8,
+         8,
+         8,
+         gemm::Layout::rowMajor,
+         gemm::Layout::rowMajor,
+         gemm::Layout::rowMajor,
+         gemm::Op::none,
+         gemm::Op::none,
+         2,
+         3,
+         1,
+         1.0f,
+         0.0f},
+        {"rect-16x32x7-NT",
+         16,
+         32,
+         7,
+         gemm::Layout::rowMajor,
+         gemm::Layout::colMajor,
+         gemm::Layout::rowMajor,
+         gemm::Op::none,
+         gemm::Op::transpose,
+         1,
+         2,
+         0,
+         1.0f,
+         0.0f},
+        {"rect-31x17x33-TN",
+         31,
+         17,
+         33,
+         gemm::Layout::colMajor,
+         gemm::Layout::rowMajor,
+         gemm::Layout::colMajor,
+         gemm::Op::transpose,
+         gemm::Op::none,
+         2,
+         1,
+         2,
+         -1.25f,
+         0.5f},
+        {"rect-64x48x33-TT",
+         64,
+         48,
+         33,
+         gemm::Layout::rowMajor,
+         gemm::Layout::rowMajor,
+         gemm::Layout::rowMajor,
+         gemm::Op::transpose,
+         gemm::Op::transpose,
+         3,
+         3,
+         2,
+         0.5f,
+         -2.0f},
+        {"skinny-7x5x3-colA",
+         7,
+         5,
+         3,
+         gemm::Layout::colMajor,
+         gemm::Layout::rowMajor,
+         gemm::Layout::rowMajor,
+         gemm::Op::none,
+         gemm::Op::none,
+         4,
+         1,
+         0,
+         2.0f,
+         1.0f},
+        {"padded-33x9x17",
+         33,
+         9,
+         17,
+         gemm::Layout::colMajor,
+         gemm::Layout::colMajor,
+         gemm::Layout::colMajor,
+         gemm::Op::none,
+         gemm::Op::transpose,
+         5,
+         2,
+         3,
+         1.0f,
+         0.25f},
+        {"k-zero-5x4",
+         5,
+         4,
+         0,
+         gemm::Layout::rowMajor,
+         gemm::Layout::rowMajor,
+         gemm::Layout::rowMajor,
+         gemm::Op::none,
+         gemm::Op::none,
+         0,
+         0,
+         0,
+         1.0f,
+         2.0f},
+        {"m-zero-0x4",
+         0,
+         4,
+         3,
+         gemm::Layout::rowMajor,
+         gemm::Layout::rowMajor,
+         gemm::Layout::rowMajor,
+         gemm::Op::none,
+         gemm::Op::none,
+         0,
+         0,
+         0,
+         1.0f,
+         2.0f},
     };
 
-    std::printf(
-        "# alpaka3 gemm reference cross-check schema=1 generator=lcg-6364136223846793005\n");
-    std::printf(
-        "case_id,M,N,K,layout_a,layout_b,layout_c,op_a,op_b,ld_a,ld_b,ld_c,alpha,beta,i,j,value\n");
+    std::printf("# alpaka3 gemm reference cross-check schema=1 generator=lcg-6364136223846793005\n");
+    std::printf("case_id,M,N,K,layout_a,layout_b,layout_c,op_a,op_b,ld_a,ld_b,ld_c,alpha,beta,i,j,value\n");
 
     for(std::size_t index = 0; index < sizeof(cases) / sizeof(cases[0]); ++index)
     {
@@ -152,7 +267,7 @@ int main()
         Buffer<float> b(storedRowsB, storedColsB, item.layoutB, item.opB, item.padB);
         Buffer<double> c(item.m, item.n, item.layoutC, gemm::Op::none, item.padC);
 
-        std::uint64_t state = 0x0123456789abcdefULL + 0x9e3779b97f4a7c15ULL * index;
+        std::uint64_t state = 0x0123'4567'89ab'cdefULL + 0x9e37'79b9'7f4a'7c15ULL * index;
         fill(a.storage, state);
         fill(b.storage, state);
         fill(c.storage, state);

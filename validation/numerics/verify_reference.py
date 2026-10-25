@@ -33,11 +33,15 @@ INCREMENT = 1442695040888963407
 MASK = (1 << 64) - 1
 
 
+# pylint: disable=too-few-public-methods
 class Lcg:
+    """64-bit linear congruential generator matching the C++ tool."""
+
     def __init__(self, seed: int) -> None:
         self.state = seed & MASK
 
     def next_float(self) -> np.float32:
+        """Advance the generator and return a float32 in [-1, 1)."""
         self.state = (self.state * MULTIPLIER + INCREMENT) & MASK
         value = (self.state >> 40) / 16777216.0
         return np.float32(value * 2.0 - 1.0)
@@ -55,7 +59,10 @@ def make_storage(rows: int, cols: int, layout: str, pad: int, lcg: Lcg) -> np.nd
     return values.reshape(cols, ld).T[:rows, :cols]
 
 
+# The comparison deliberately keeps every intermediate in one flat loop.
+# pylint: disable=too-many-locals,too-many-statements,too-many-return-statements
 def main(argv: list[str]) -> int:
+    """Run the numpy cross-check and return a process exit code."""
     if len(argv) != 2:
         print(f"usage: {argv[0]} <csv>", file=sys.stderr)
         return 2

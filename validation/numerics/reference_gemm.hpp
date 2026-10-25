@@ -142,14 +142,14 @@ namespace alpaka::validation::gemm
         auto const x = std::bit_cast<std::uint32_t>(value);
         auto const sign = static_cast<std::uint16_t>((x >> 16) & 0x8000u);
         auto const exponent = (x >> 23) & 0xffu;
-        auto const mantissa = x & 0x7fffffu;
+        auto const mantissa = x & 0x7f'ffffu;
 
         if(exponent == 0xffu)
             return static_cast<std::uint16_t>(sign | (mantissa == 0 ? 0x7c00u : 0x7e00u));
 
         if(exponent >= 113u && exponent <= 142u)
         {
-            auto const significand = mantissa | 0x800000u;
+            auto const significand = mantissa | 0x80'0000u;
             auto const rounded = significand + (1u << 12) - 1u + ((significand >> 13) & 1u);
             auto e = exponent - 112u + (rounded >> 24);
             auto const outMantissa = (rounded >> 13) & 0x3ffu;
@@ -172,7 +172,7 @@ namespace alpaka::validation::gemm
     inline std::uint16_t floatToBf16Bits(float value) noexcept
     {
         auto const x = std::bit_cast<std::uint32_t>(value);
-        if((x & 0x7fffffffu) > 0x7f800000u)
+        if((x & 0x7fff'ffffu) > 0x7f80'0000u)
             return static_cast<std::uint16_t>((x >> 16) | 0x0040u);
         auto const roundBit = (x >> 16) & 1u;
         auto const rounded = x + 0x7fffu + roundBit;
@@ -252,12 +252,7 @@ namespace alpaka::validation::gemm
      * contract those into an FMA, which is covered by the tolerance model.
      */
     template<typename Acc, typename OutT, typename AT, typename BT, typename AlphaT, typename BetaT>
-    void gemm_reference(
-        MatrixView<OutT> c,
-        MatrixView<AT> a,
-        MatrixView<BT> b,
-        AlphaT alpha,
-        BetaT beta)
+    void gemm_reference(MatrixView<OutT> c, MatrixView<AT> a, MatrixView<BT> b, AlphaT alpha, BetaT beta)
     {
         static_assert(std::is_arithmetic_v<Acc>, "the accumulator must be an arithmetic type");
         detail::requireScalar<AlphaT, BetaT>();
@@ -325,12 +320,7 @@ namespace alpaka::validation::gemm
      * bits). The documented useful range and limits are in TOLERANCE.md.
      */
     template<typename OutT, typename AT, typename BT, typename AlphaT, typename BetaT>
-    void gemm_reference_extended(
-        MatrixView<OutT> c,
-        MatrixView<AT> a,
-        MatrixView<BT> b,
-        AlphaT alpha,
-        BetaT beta)
+    void gemm_reference_extended(MatrixView<OutT> c, MatrixView<AT> a, MatrixView<BT> b, AlphaT alpha, BetaT beta)
     {
         static_assert(
             hasExtendedPrecisionReference,
