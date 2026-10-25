@@ -13,6 +13,8 @@
 #include "alpaka/onAcc/gemm.hpp"
 #include "alpaka/onHost/Queue.hpp"
 #include "alpaka/onHost/ThreadSpec.hpp"
+#include "alpaka/onHost/algo/internal/gemmPlan.hpp"
+#include "alpaka/onHost/algo/internal/gemmTypes.hpp"
 #include "alpaka/onHost/trait.hpp"
 #include "alpaka/trait.hpp"
 
@@ -22,9 +24,11 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <type_traits>
+#include <utility>
 
 /** @file
  *
@@ -51,127 +55,6 @@
 
 namespace alpaka::onHost
 {
-    /** Storage layout of a GEMM view. */
-    enum class GemmLayout : std::uint8_t
-    {
-        rowMajor,
-        colMajor
-    };
-
-    /** Whether a view is used as stored or transposed. */
-    enum class GemmOp : std::uint8_t
-    {
-        none,
-        transpose
-    };
-
-    /** Numerical mode of the GEMM operation.
-     *
-     * fp16ToFp32 requires @ref alpaka::Float16 storage for A and B and FP32 storage for C. bf16ToFp32 is the same
-     * with @ref alpaka::BFloat16. In both modes the stored inputs are converted exactly to FP32 inside the common
-     * kernel, the products and the accumulation are FP32, and the result is stored as FP32. The mode and the view
-     * value types must agree: a mismatch, including passing already-converted FP32 operands with a mixed mode tag,
-     * is rejected before launch. The two 16-bit storage types are never interchangeable.
-     */
-    enum class GemmNumericMode : std::uint8_t
-    {
-        fp32,
-        fp64,
-        fp16ToFp32,
-        bf16ToFp32
-    };
-
-    /** Kernel implementation selected for the multiply-accumulate path.
-     *
-     * registerBlocked is the M3 default: one register-blocked outer-product per worker. simple keeps the M2 direct
-     * path without operand reuse selectable for comparison and regression testing. Both paths share the same tile
-     * regions, boundaries and numerical contract.
-     */
-    enum class GemmKernel : std::uint8_t
-    {
-        registerBlocked,
-        simple
-    };
-
-    /** Operand supply policy of the register-blocked GEMM path.
-     *
-     * direct keeps the M3 path that reads A and B from global memory in the K loop. cooperative stages one A/B
-     * panel per K block in block-shared memory and reads the register-blocked outer product from there. automatic
-     * resolves to the compile-time configuration value @ref internal::defaultGemmStaging, so the shipped default is
-     * the direct path and no measurement is required to select it.
-     */
-    enum class GemmStaging : std::uint8_t
-    {
-        automatic,
-        direct,
-        cooperative
-    };
-
-    /** Staging selection and depth for the register-blocked GEMM path.
-     *
-     * stages is the synchronous ring depth of the cooperative policy and must be in {1, 2, 3}. It is ignored by the
-     * direct policy.
-     */
-    struct GemmStagingConfig
-    {
-        GemmStaging policy = GemmStaging::automatic;
-        std::uint32_t stages = 1;
-    };
-
-    /** Non-owning GEMM matrix view.
-     *
-     * rows and cols are the *logical* extents of the view before applying op. The stored matrix therefore has
-     * storedRows() x storedCols() elements and is addressed as
-     *
-     *     layout == rowMajor ? row * ld + col : col * ld + row
-     *
-     * A smaller logical extent with a larger ld, or a shifted data pointer, expresses a padded leading dimension and
-     * a subview.
-     */
-    template<typename T>
-    struct GemmView
-    {
-        using value_type = T;
-
-        T* data = nullptr;
-        std::size_t rows = 0;
-        std::size_t cols = 0;
-        std::size_t ld = 0;
-        GemmLayout layout = GemmLayout::rowMajor;
-        GemmOp op = GemmOp::none;
-
-        [[nodiscard]] constexpr std::size_t storedRows() const noexcept
-        {
-            return op == GemmOp::none ? rows : cols;
-        }
-
-        [[nodiscard]] constexpr std::size_t storedCols() const noexcept
-        {
-            return op == GemmOp::none ? cols : rows;
-        }
-
-        [[nodiscard]] constexpr std::size_t storedElements() const noexcept
-        {
-            return storedRows() * storedCols();
-        }
-
-        [[nodiscard]] constexpr auto& stored(std::size_t row, std::size_t col) const
-        {
-            ALPAKA_ASSERT(data != nullptr);
-            std::size_t const offset = layout == GemmLayout::rowMajor ? row * ld + col : col * ld + row;
-            return data[offset];
-        }
-
-        /** Element (i, k) of the logical operand. */
-        [[nodiscard]] ALPAKA_FN_INLINE constexpr auto& at(std::size_t i, std::size_t k) const
-        {
-            return op == GemmOp::none ? stored(i, k) : stored(k, i);
-        }
-    };
-
-    template<typename T>
-    GemmView(T*, std::size_t, std::size_t, std::size_t, GemmLayout, GemmOp) -> GemmView<T>;
-
     namespace internal
     {
         inline std::uint64_t checkedAdd(std::uint64_t lhs, std::uint64_t rhs, char const* what)
@@ -202,6 +85,17 @@ namespace alpaka::onHost
                     throw std::invalid_argument(std::string{"GEMM: value does not fit 64 bits: "} + what);
             }
             return static_cast<std::uint64_t>(value);
+        }
+
+        /** Largest power-of-two divisor of a pointer address, or zero when the pointer is null. */
+        inline std::uint64_t pointerAlignment(void const* pointer)
+        {
+            if(pointer == nullptr)
+                return 0u;
+            auto const address = reinterpret_cast<std::uintptr_t>(pointer);
+            if(address == 0u)
+                return 0u;
+            return static_cast<std::uint64_t>(address & (std::uintptr_t{0} - address));
         }
 
         /** Number of elements in the stored view, including the padding of the slow dimension. */
@@ -301,6 +195,19 @@ namespace alpaka::onHost
             constexpr std::uint32_t threads = blockThreadCount<T_Acc, T_Api, T_DeviceKind, T_Exec>();
             return TileConfig{tile, bk, threads};
         }
+
+        /** The compiled candidate family for one operation, accumulator type, target and executor.
+         *
+         * The family is constexpr: its size and every plan field are known at compile time, so the launcher can
+         * dispatch to a selected plan without making any problem dimension a template argument. On a target whose
+         * block-thread limit is one the worker-column axis collapses and the family holds 32 entries; otherwise it
+         * holds the full 64. `buildCandidateFamily` enforces the cap.
+         */
+        template<typename T_Acc, typename T_Api, typename T_DeviceKind, typename T_Exec>
+        inline constexpr GemmCandidateFamily gemmCandidateFamily = buildCandidateFamily(
+            std::max<std::uint32_t>(getArchSimdWidth<T_Acc>(T_Api{}, T_DeviceKind{}), 1u),
+            blockThreadCount<T_Acc, T_Api, T_DeviceKind, T_Exec>(),
+            1u);
 
         /** Compile-time register-blocked plan.
          *
@@ -640,6 +547,57 @@ namespace alpaka::onHost
             launch(regions.corner);
         }
 
+        /** Dispatch the selected plan onto the compiled kernel family.
+         *
+         * Every family member is instantiated once per accumulator type, target and executor. The runtime plan is
+         * compared against each compile-time member and only the matching kernel is launched; the plan fields remain
+         * runtime values from the problem's point of view. A plan outside the family throws instead of silently
+         * falling back to a different configuration.
+         */
+        template<typename T_Acc, typename T_Api, typename T_DeviceKind, typename T_Exec, typename... T_Args>
+        void dispatchGemmPlan(GemmPlan const& plan, T_Args&&... args)
+        {
+            bool dispatched = false;
+            [&]<std::size_t... T_Index>(std::index_sequence<T_Index...>)
+            {
+                auto const tryAt = [&]<std::size_t T_I>()
+                {
+                    constexpr GemmPlan candidate
+                        = gemmCandidateFamily<T_Acc, T_Api, T_DeviceKind, T_Exec>.candidates[T_I];
+                    if(plan != candidate)
+                        return false;
+                    if constexpr(candidate.policy == GemmStaging::cooperative)
+                    {
+                        launchGemmTilesRegisterBlocked<
+                            candidate.threadM,
+                            candidate.threadN,
+                            candidate.workerRows,
+                            candidate.workerCols,
+                            candidate.kBlock,
+                            candidate.stages,
+                            candidate.threadCount,
+                            T_Acc>(std::forward<T_Args>(args)...);
+                    }
+                    else
+                    {
+                        launchGemmTilesRegisterBlocked<
+                            candidate.threadM,
+                            candidate.threadN,
+                            candidate.workerRows,
+                            candidate.workerCols,
+                            candidate.kBlock,
+                            0u,
+                            candidate.threadCount,
+                            T_Acc>(std::forward<T_Args>(args)...);
+                    }
+                    return true;
+                };
+                ((dispatched = dispatched || tryAt.template operator()<T_Index>()), ...);
+            }(std::make_index_sequence<gemmCandidateFamily<T_Acc, T_Api, T_DeviceKind, T_Exec>.size>{});
+            if(!dispatched)
+                throw std::invalid_argument("GEMM: selected plan is not part of the compiled candidate family");
+        }
+
         /** Dispatch the cooperative staging policy over the bounded stage-count family {1, 2, 3}. */
         template<
             std::uint32_t T_TM,
@@ -789,8 +747,10 @@ namespace alpaka::onHost
             GemmView<T_B> b,
             T_Alpha alpha,
             T_Beta beta,
+            GemmNumericMode mode,
             GemmKernel kernel,
-            GemmStagingConfig staging)
+            GemmStagingConfig staging,
+            std::optional<GemmPlan> expertOverride)
         {
             using Api = std::remove_cvref_t<decltype(queue.getApi())>;
             using DeviceKind = std::remove_cvref_t<decltype(queue.getDeviceKind())>;
@@ -807,46 +767,59 @@ namespace alpaka::onHost
             constexpr std::uint32_t blockThreads = blockThreadCount<T_Acc, Api, DeviceKind, T_Exec>();
             bool const readOperands = m != 0u && n != 0u && k != 0u && alpha != T_Alpha{0};
 
+            if(expertOverride.has_value() && (kernel != GemmKernel::registerBlocked || !readOperands))
+                throw std::invalid_argument(
+                    "GEMM: an expert plan override requires the register-blocked path with operand reads");
+
             if(readOperands)
             {
                 if(kernel == GemmKernel::registerBlocked)
                 {
-                    constexpr RegisterTileConfig rb = registerTileConfig<T_Acc, Api, DeviceKind, T_Exec>();
-                    constexpr std::uint64_t bm = static_cast<std::uint64_t>(rb.wr) * rb.tm;
-                    constexpr std::uint64_t bn = static_cast<std::uint64_t>(rb.wc) * rb.tn;
-                    std::uint64_t const sharedLimit
-                        = static_cast<std::uint64_t>(queue.getDevice().getDeviceProperties().sharedMemPerBlockBytes);
-                    GemmStaging const policy
-                        = resolveStaging(staging.policy, bm, bn, rb.bk, sizeof(T_Acc), staging.stages, sharedLimit);
-                    if(policy == GemmStaging::cooperative)
-                    {
-                        dispatchStagedGemm<rb.tm, rb.tn, rb.wr, rb.wc, rb.bk, blockThreads, T_Acc>(
-                            staging,
-                            queue,
-                            exec,
-                            c,
-                            a,
-                            b,
-                            m,
-                            n,
-                            k,
-                            alpha,
-                            beta);
-                    }
-                    else
-                    {
-                        launchGemmTilesRegisterBlocked<rb.tm, rb.tn, rb.wr, rb.wc, rb.bk, 0u, blockThreads, T_Acc>(
-                            queue,
-                            exec,
-                            c,
-                            a,
-                            b,
-                            m,
-                            n,
-                            k,
-                            alpha,
-                            beta);
-                    }
+                    GemmFacts const facts
+                        = makeGemmFacts<T_Acc>(Api{}, DeviceKind{}, queue.getDevice().getDeviceProperties());
+
+                    GemmProblem problem;
+                    problem.m = m;
+                    problem.n = n;
+                    problem.k = k;
+                    problem.aLayout = a.layout;
+                    problem.bLayout = b.layout;
+                    problem.cLayout = c.layout;
+                    problem.aOp = a.op;
+                    problem.bOp = b.op;
+                    problem.cOp = c.op;
+                    problem.mode = mode;
+                    problem.elementBytesA = sizeof(std::remove_cv_t<T_A>);
+                    problem.elementBytesB = sizeof(std::remove_cv_t<T_B>);
+                    problem.elementBytesC = sizeof(std::remove_cv_t<T_C>);
+                    problem.alignmentA = pointerAlignment(a.data);
+                    problem.alignmentB = pointerAlignment(b.data);
+                    problem.alignmentC = pointerAlignment(c.data);
+                    problem.readsOperands = readOperands;
+
+                    // Keep the shipped automatic policy: an unconstrained request uses the compile-time default.
+                    GemmPlanRequest request;
+                    if(staging.policy != GemmStaging::automatic)
+                        request.policy = staging.policy;
+                    else if(defaultGemmStaging != GemmStaging::automatic)
+                        request.policy = defaultGemmStaging;
+                    request.stages = staging.stages;
+                    request.expertOverride = expertOverride;
+
+                    PlanSelection const selection
+                        = selectPlan(problem, facts, gemmCandidateFamily<T_Acc, Api, DeviceKind, T_Exec>, request);
+                    dispatchGemmPlan<T_Acc, Api, DeviceKind, T_Exec>(
+                        selection.plan,
+                        queue,
+                        exec,
+                        c,
+                        a,
+                        b,
+                        m,
+                        n,
+                        k,
+                        alpha,
+                        beta);
                 }
                 else
                 {
