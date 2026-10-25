@@ -403,3 +403,29 @@ These are recorded as discovered work. This document does not change the guide.
 ## 17 Review record
 
 Reviewer: none yet. Verdict: pending. No independent review of this design has occurred. Each requirement names its own owner role; the review record itself is owned by maintainability.
+
+## 18 M2 as implemented
+
+M2 adds the first correct common-source GEMM. It is a direct-load implementation with no shared-memory staging, no layout engine, no planner and no native matrix instruction. The public host entry point is
+
+```cpp
+template<typename T_Queue, alpaka::concepts::Executor T_Exec, typename T_C, typename T_A, typename T_B,
+         typename T_Alpha, typename T_Beta>
+void alpaka::onHost::gemm(
+    T_Queue const& queue,
+    T_Exec const& exec,
+    GemmView<T_C> c,
+    GemmView<T_A> a,
+    GemmView<T_B> b,
+    T_Alpha alpha,
+    T_Beta beta,
+    GemmNumericMode mode = GemmNumericMode::fp32);
+```
+
+`GemmView<T>` carries the logical rows/cols, leading dimension, row-major or column-major layout and the none/transpose flag. The call validates dimensions, leading dimensions, overlapping C/A or C/B storage, null pointers of views that are actually read or written, and checked 64-bit size and launch arithmetic before it enqueues anything. FP32 and FP64 are implemented. `fp16ToFp32` and `bf16ToFp32` are named in the mode enum but throw before launch until the FP16/BF16 storage types exist.
+
+Tile selection is a bounded compile-time family. The base tile size is `bit_ceil(getArchSimdWidth<Accumulator>)` clamped to {4,8,16,32}; it grows by one step when `getNumElemPerThread` and the problem shape justify it, and problems smaller than four rows or columns keep the 4x4 fallback. `BK` is 8 or 16 from the compiled SIMD width. The block thread count is a compile-time value from `getMaxThreadsPerBlock` and the SIMD/ILP traits, so host CPUs get one worker per block and a GPU would get a bounded power-of-two block. The executor may launch fewer blocks than tiles; each block then walks its assigned tiles in grid-stride order, and one tile is still processed at a time by a lockstep scope with one distributed accumulator fragment per worker.
+
+Output tiles are split into the four disjoint regions of section 6: the full rectangle, the bottom strip, the right strip and the corner. Each region is a separate launch with its own tile origin; all four kernels are the same boundary-aware code. Coordinates are tested before any load. Invalid K contributes an exact zero, and invalid M/N suppresses the store. No collective exists in the kernel, so the lockstep tail callback can diverge freely.
+
+Known limitations for M2: direct global loads only, one accumulator fragment per worker without register blocking or operand reuse, no packed panels or cache macrotiles, no plan diagnostics or expert override, no native matrix path, and no GPU measurement in this change. The benchmark adapter covers strict FP32 on the host CPU.
