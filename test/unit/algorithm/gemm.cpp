@@ -1201,12 +1201,34 @@ TEMPLATE_LIST_TEST_CASE(
         }
     };
 
+    // The GEMM accumulator starts at +0. IEEE-754 signed-zero addition is (+0)+(+0)=+0,
+    // (+0)+(-0)=+0 and (-0)+(-0)=-0. Work on raw bits because a fast-math build may fold a
+    // zero sum back into the unaugmented product and lose the accumulator's sign rule.
+    auto const signedZeroSumBits = [](std::uint32_t accumulatorBits, std::uint32_t productBits)
+    {
+        constexpr std::uint32_t signMask = 0x8000'0000u;
+        constexpr std::uint32_t magnitudeMask = 0x7fff'ffffu;
+        if((accumulatorBits & magnitudeMask) != 0u || (productBits & magnitudeMask) != 0u)
+            return productBits; // this table only ever uses the +0 accumulator
+        return (accumulatorBits & productBits) & signMask;
+    };
+    // Storage conversion and GEMM arithmetic are different operations on -0: the stored bit pattern must survive
+    // unchanged, while the GEMM accumulation below starts from +0 and therefore yields +0 for a -0 product.
+    auto const expectNegativeZeroStorageRoundTrip = []<typename Storage>(Storage, char const* label)
+    {
+        INFO(label);
+        CHECK(
+            std::bit_cast<std::uint32_t>(Storage::fromBits(0x8000u).toFloat())
+            == std::bit_cast<std::uint32_t>(std::bit_cast<float>(std::uint32_t{0x8000'0000u})));
+    };
+
     // A-side: C = A * 1, so every output row carries the converted stored value.
     auto const checkASide = [&]<typename Storage>(
                                 std::vector<std::uint16_t> const& patterns,
                                 onHost::GemmNumericMode hostMode,
                                 char const* label)
     {
+        expectNegativeZeroStorageRoundTrip(Storage{}, label);
         std::size_t const count = patterns.size();
         std::vector<Storage> aHost(count);
         for(std::size_t i = 0u; i < count; ++i)
@@ -1235,7 +1257,12 @@ TEMPLATE_LIST_TEST_CASE(
         for(std::size_t i = 0u; i < count; ++i)
         {
             INFO(label);
-            expectSameBits(result[i], 0.0f + aHost[i].toFloat() * 1.0f, static_cast<int>(i), "A");
+            // The GEMM accumulator starts at +0, so a -0 product sums to +0 under IEEE-754.
+            expectSameBits(
+                result[i],
+                std::bit_cast<float>(signedZeroSumBits(0u, std::bit_cast<std::uint32_t>(aHost[i].toFloat()))),
+                static_cast<int>(i),
+                "A");
         }
     };
 
@@ -1245,6 +1272,7 @@ TEMPLATE_LIST_TEST_CASE(
                                 onHost::GemmNumericMode hostMode,
                                 char const* label)
     {
+        expectNegativeZeroStorageRoundTrip(Storage{}, label);
         std::size_t const count = patterns.size();
         std::vector<Storage> bHost(count);
         for(std::size_t i = 0u; i < count; ++i)
@@ -1273,7 +1301,12 @@ TEMPLATE_LIST_TEST_CASE(
         for(std::size_t i = 0u; i < count; ++i)
         {
             INFO(label);
-            expectSameBits(result[i], 0.0f + bHost[i].toFloat() * 1.0f, static_cast<int>(i), "B");
+            // The GEMM accumulator starts at +0, so a -0 product sums to +0 under IEEE-754.
+            expectSameBits(
+                result[i],
+                std::bit_cast<float>(signedZeroSumBits(0u, std::bit_cast<std::uint32_t>(bHost[i].toFloat()))),
+                static_cast<int>(i),
+                "B");
         }
     };
 
