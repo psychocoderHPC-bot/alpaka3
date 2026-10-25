@@ -82,6 +82,7 @@ Individual chapters are based on the information of the chapters before.
    tutorial/kernelFn.rst
    tutorial/vendorInterop.rst
    tutorial/algorithms.rst
+   tutorial/gemm.rst
 
 .. toctree::
    :caption: Advanced
