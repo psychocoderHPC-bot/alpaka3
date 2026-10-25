@@ -310,23 +310,41 @@ namespace alpaka::validation::gemm
         }
     }
 
-    /** Whether the platform long double carries more precision than double. */
+    /** Whether the platform long double carries more precision than double.
+     *
+     * HIP and SYCL compile the test sources in a host and a device pass with different long double definitions
+     * (device long double is 64-bit). An `if constexpr` on the two views would keep the FP64 kernel launch in the
+     * host pass while dropping it from the device image, which fails at run time with a missing symbol. Treat the
+     * extended-precision oracle as unavailable for those toolchains so both passes agree and the FP64 reference
+     * validation is skipped explicitly.
+     */
+#if defined(__HIP__) || defined(SYCL_LANGUAGE_VERSION)
+    inline constexpr bool hasExtendedPrecisionReference = false;
+#else
     inline constexpr bool hasExtendedPrecisionReference
         = std::numeric_limits<long double>::digits > std::numeric_limits<double>::digits;
+#endif
 
     /** Higher precision reference for FP64 data.
      *
      * Only usable where long double is wider than double (x86-64: 64 mantissa
      * bits). The documented useful range and limits are in TOLERANCE.md.
+     *
+     * Platforms without a wider long double (for example HIP/amdclang and
+     * oneAPI/icpx) cannot provide this oracle at all. The function then throws
+     * instead of silently falling back to a plain FP64 accumulation, so a
+     * caller must check @ref hasExtendedPrecisionReference and report the FP64
+     * validation as skipped.
      */
     template<typename OutT, typename AT, typename BT, typename AlphaT, typename BetaT>
     void gemm_reference_extended(MatrixView<OutT> c, MatrixView<AT> a, MatrixView<BT> b, AlphaT alpha, BetaT beta)
     {
-        static_assert(
-            hasExtendedPrecisionReference,
-            "gemm_reference_extended needs a long double wider than double; use a multiprecision "
-            "reference or restrict the test");
-        gemm_reference<long double>(c, a, b, alpha, beta);
+        if constexpr(!hasExtendedPrecisionReference)
+            throw std::logic_error(
+                "gemm_reference_extended needs a long double wider than double; an FP64 reference validation "
+                "cannot be certified on this platform and must be reported as skipped");
+        else
+            gemm_reference<long double>(c, a, b, alpha, beta);
     }
 
 } // namespace alpaka::validation::gemm

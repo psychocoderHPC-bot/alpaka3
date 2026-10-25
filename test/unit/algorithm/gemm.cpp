@@ -782,37 +782,34 @@ TEMPLATE_LIST_TEST_CASE("gemm degenerate size contract", "[gemm][semantics]", Te
 
 TEMPLATE_LIST_TEST_CASE("gemm FP64 mode", "[gemm][numerics]", TestBackends)
 {
-    auto deviceExec = test::getDeviceExecutorOrSkipTest(TestType::makeDict());
-    auto device = test::getDevice(deviceExec);
-    auto exec = test::getExecutor(deviceExec);
-    auto queue = device.makeQueue();
-
-    long double worstScaled = 0.0L;
-    long double worstStaged = 0.0L;
-    for(Shape const shape : {Shape{1u, 1u, 1u}, Shape{3u, 5u, 7u}, Shape{8u, 9u, 16u}, Shape{17u, 15u, 15u}})
+    if constexpr(!validation::gemm::hasExtendedPrecisionReference)
     {
-        for(int op = 0; op < 4; ++op)
+        // A plain FP64 accumulation cannot certify the FP64 kernel. Report the missing oracle instead of turning a
+        // reduced reference into a passing test.
+        SKIP(
+            "FP64 reference validation skipped: long double is not wider than double on this platform, so no "
+            "extended-precision oracle exists");
+    }
+    else
+    {
+        auto deviceExec = test::getDeviceExecutorOrSkipTest(TestType::makeDict());
+        auto device = test::getDevice(deviceExec);
+        auto exec = test::getExecutor(deviceExec);
+        auto queue = device.makeQueue();
+
+        long double worstScaled = 0.0L;
+        long double worstStaged = 0.0L;
+        for(Shape const shape : {Shape{1u, 1u, 1u}, Shape{3u, 5u, 7u}, Shape{8u, 9u, 16u}, Shape{17u, 15u, 15u}})
         {
-            Variant variant;
-            variant.opA = (op & 1) != 0 ? onHost::GemmOp::transpose : onHost::GemmOp::none;
-            variant.opB = (op & 2) != 0 ? onHost::GemmOp::transpose : onHost::GemmOp::none;
-            variant.alpha = 1.25;
-            variant.beta = -0.75;
-            std::uint64_t const caseSeed = 0x6464u + static_cast<std::uint64_t>(op);
-            auto const report = checkCase<double, long double>(
-                device,
-                exec,
-                queue,
-                shape,
-                variant,
-                NumericMode::fp64,
-                3u,
-                1u,
-                caseSeed);
-            worstScaled = std::max(worstScaled, report.maxScaledError);
-            for(auto const& staging : cooperativeStagingConfigs())
+            for(int op = 0; op < 4; ++op)
             {
-                auto const staged = checkCase<double, long double>(
+                Variant variant;
+                variant.opA = (op & 1) != 0 ? onHost::GemmOp::transpose : onHost::GemmOp::none;
+                variant.opB = (op & 2) != 0 ? onHost::GemmOp::transpose : onHost::GemmOp::none;
+                variant.alpha = 1.25;
+                variant.beta = -0.75;
+                std::uint64_t const caseSeed = 0x6464u + static_cast<std::uint64_t>(op);
+                auto const report = checkCase<double, long double>(
                     device,
                     exec,
                     queue,
@@ -821,14 +818,28 @@ TEMPLATE_LIST_TEST_CASE("gemm FP64 mode", "[gemm][numerics]", TestBackends)
                     NumericMode::fp64,
                     3u,
                     1u,
-                    caseSeed,
-                    staging);
-                worstStaged = std::max(worstStaged, staged.maxScaledError);
+                    caseSeed);
+                worstScaled = std::max(worstScaled, report.maxScaledError);
+                for(auto const& staging : cooperativeStagingConfigs())
+                {
+                    auto const staged = checkCase<double, long double>(
+                        device,
+                        exec,
+                        queue,
+                        shape,
+                        variant,
+                        NumericMode::fp64,
+                        3u,
+                        1u,
+                        caseSeed,
+                        staging);
+                    worstStaged = std::max(worstStaged, staged.maxScaledError);
+                }
             }
         }
+        std::cout << "[fp64] worst scaled error " << static_cast<double>(worstScaled) << ", staged "
+                  << static_cast<double>(worstStaged) << "\n";
     }
-    std::cout << "[fp64] worst scaled error " << static_cast<double>(worstScaled) << ", staged "
-              << static_cast<double>(worstStaged) << "\n";
 }
 
 TEMPLATE_LIST_TEST_CASE("gemm host validation rejects invalid problems", "[gemm][validation]", TestBackends)
