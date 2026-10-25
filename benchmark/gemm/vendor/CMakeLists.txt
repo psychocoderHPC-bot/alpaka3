@@ -107,4 +107,7 @@ target_compile_definitions(
         GEMM_SOURCE_DIR="${ALPAKA_GEMM_CHECKOUT_ROOT}"
 )
 alpaka_finalize(gemm_vendor_bench)
+if(COMMAND alpaka_gemm_apply_native_isa)
+    alpaka_gemm_apply_native_isa(gemm_vendor_bench)
+endif()
 set_target_properties(gemm_vendor_bench PROPERTIES FOLDER benchmarks/gemm)

@@ -25,6 +25,29 @@ cmake --build build/gemm-bench --target gemm_bench -j
 Add `-Dalpaka_COMPILE_PEDANTIC=ON` when configuring from the repository root so
 the harness follows the same warning policy as the alpaka targets.
 
+## Host-native ISA for performance measurements
+
+The default build stays baseline-portable: the library is header-only and never
+forces ISA flags on its consumers, and no target receives `-march=native`
+implicitly. The planner and the register-blocked kernel evaluate the compiled
+SIMD width in the consuming translation unit, so a default build plans and runs
+with the baseline vector width.
+
+Performance numbers require the opt-in host-native ISA for the GEMM targets:
+
+```bash
+cmake -S benchmark/gemm -B build/gemm-bench \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DALPAKA_GEMM_NATIVE_ISA=ON
+```
+
+`ALPAKA_GEMM_NATIVE_ISA` (default `OFF`) applies `-march=native` to the host C++
+translation units of `gemm_bench` and the GEMM unit tests only, using GCC/Clang
+syntax. Device passes of accelerator builds keep their own flags. Correctness
+results must be identical with and without the option; only the code generation
+changes. Do not use this option for portable CI artifacts that are distributed
+across machines.
+
 ## Smoke run (placeholder functor)
 
 The M0 driver ships a placeholder `GemmFunctor` that reports

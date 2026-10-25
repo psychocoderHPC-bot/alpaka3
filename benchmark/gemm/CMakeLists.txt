@@ -6,6 +6,10 @@ cmake_minimum_required(VERSION 3.25)
 set_property(GLOBAL PROPERTY USE_FOLDERS ON)
 project(alpakaGemmBenchmark LANGUAGES CXX)
 
+# Also loadable when this directory is configured standalone (not via the root
+# CMakeLists.txt); include_guard keeps the option and helper single-definition.
+include("${CMAKE_CURRENT_LIST_DIR}/../../cmake/alpakaGemm.cmake")
+
 if(NOT TARGET alpaka::alpaka)
     option(alpaka_USE_SOURCE_TREE "Use alpaka's source tree instead of an alpaka installation" OFF)
     if(alpaka_USE_SOURCE_TREE)
@@ -40,6 +44,7 @@ else()
     target_compile_options(gemm_bench PRIVATE "$<$<COMPILE_LANGUAGE:CXX>:-Wall;-Wextra;-Wpedantic>")
 endif()
 
+alpaka_gemm_apply_native_isa(gemm_bench)
 set_target_properties(gemm_bench PROPERTIES FOLDER benchmarks/gemm)
 
 # Run as bounded ctest entries. The full manifest is a benchmark, not a CI test.

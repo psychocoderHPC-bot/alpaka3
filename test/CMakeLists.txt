@@ -75,6 +75,10 @@ function(alpaka_add_test_target target_prefix folder)
                         PRIVATE Catch2::Catch2WithMain alpaka::alpaka alpaka::test
                     )
                     alpaka_finalize(${_test_target_name})
+                    # Opt-in host-native ISA for the GEMM tests only; other tests stay baseline.
+                    if(_test_target_name MATCHES "^unit_test_algorithm_gemm")
+                        alpaka_gemm_apply_native_isa(${_test_target_name})
+                    endif()
                     catch_discover_tests(${_test_target_name} EXTRA_ARGS "-w" "NoAssertions")
                 endif()
             endforeach()

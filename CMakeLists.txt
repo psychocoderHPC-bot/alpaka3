@@ -58,6 +58,9 @@ option(alpaka_EXAMPLES "Enable/Disable examples" OFF)
 option(alpaka_HEADERCHECKS "Enable/Disable header check tests" OFF)
 option(alpaka_CLANG_TIDY "Enable/Disable clang-tidy tests" OFF)
 
+# Opt-in host-native ISA for the GEMM benchmark and test targets only.
+include(${_alpaka_CMAKE_DIR}/alpakaGemm.cmake)
+
 # only check for compiler support if this cmake is called with add_subdirectory or examples, benchmarks, ... should be compiled too
 if(
     NOT PROJECT_NAME STREQUAL CMAKE_PROJECT_NAME
