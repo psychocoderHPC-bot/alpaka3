@@ -636,6 +636,23 @@ namespace alpaka::onAcc::fragment
             uint64_t totalK,
             uint64_t totalN)
         {
+            /* Full-tile fast path: no padded lane and the whole row is in range, so the per-lane bounds
+             * checks disappear. This keeps the widening conversion in the inner loop free of control flow,
+             * which is what allows the row to be widened as one vector.
+             */
+            if constexpr(T_Layout::bElements == T_Layout::tileN)
+            {
+                if(k < totalK && colBase + T_Layout::bElements <= totalN)
+                {
+                    for(uint32_t pack = 0u; pack < T_Layout::packsPerRow; ++pack)
+                        for(uint32_t lane = 0u; lane < T_Layout::width; ++lane)
+                        {
+                            uint32_t const localN = pack * T_Layout::width + lane;
+                            data[T_Layout::bOffset + localN] = static_cast<T>(view.at(k, colBase + localN));
+                        }
+                    return;
+                }
+            }
             for(uint32_t pack = 0u; pack < T_Layout::packsPerRow; ++pack)
                 for(uint32_t lane = 0u; lane < T_Layout::width; ++lane)
                 {
