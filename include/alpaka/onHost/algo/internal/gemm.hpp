@@ -7,9 +7,10 @@
 #include "alpaka/KernelBundle.hpp"
 #include "alpaka/Vec.hpp"
 #include "alpaka/api/trait.hpp"
+#include "alpaka/core/Assert.hpp"
 #include "alpaka/core/Float16.hpp"
 #include "alpaka/core/common.hpp"
-#include "alpaka/onAcc/gemm/gemm.hpp"
+#include "alpaka/onAcc/gemm.hpp"
 #include "alpaka/onHost/Queue.hpp"
 #include "alpaka/onHost/ThreadSpec.hpp"
 #include "alpaka/onHost/trait.hpp"
@@ -45,7 +46,7 @@
  * - beta == 1 with K == 0 (or alpha == 0): no-op.
  *
  * Validation happens on the host before anything is enqueued. Invalid dimensions, leading dimensions, overlapping
- * output/input storage and overflowing size or launch arithmetic throw std::invalid_argument or std::overflow_error.
+ * output/input storage and overflowing size or launch arithmetic throw std::invalid_argument.
  */
 
 namespace alpaka::onHost
@@ -119,6 +120,7 @@ namespace alpaka::onHost
 
         [[nodiscard]] constexpr auto& stored(std::size_t row, std::size_t col) const
         {
+            ALPAKA_ASSERT(data != nullptr);
             std::size_t const offset = layout == GemmLayout::rowMajor ? row * ld + col : col * ld + row;
             return data[offset];
         }
@@ -133,19 +135,19 @@ namespace alpaka::onHost
     template<typename T>
     GemmView(T*, std::size_t, std::size_t, std::size_t, GemmLayout, GemmOp) -> GemmView<T>;
 
-    namespace gemmInternal
+    namespace internal
     {
         inline std::uint64_t checkedAdd(std::uint64_t lhs, std::uint64_t rhs, char const* what)
         {
             if(lhs > std::numeric_limits<std::uint64_t>::max() - rhs)
-                throw std::overflow_error(std::string{"GEMM: 64-bit overflow while computing "} + what);
+                throw std::invalid_argument(std::string{"GEMM: 64-bit overflow while computing "} + what);
             return lhs + rhs;
         }
 
         inline std::uint64_t checkedMul(std::uint64_t lhs, std::uint64_t rhs, char const* what)
         {
             if(lhs != 0u && rhs > std::numeric_limits<std::uint64_t>::max() / lhs)
-                throw std::overflow_error(std::string{"GEMM: 64-bit overflow while computing "} + what);
+                throw std::invalid_argument(std::string{"GEMM: 64-bit overflow while computing "} + what);
             return lhs * rhs;
         }
 
@@ -160,7 +162,7 @@ namespace alpaka::onHost
             if constexpr(sizeof(std::size_t) > sizeof(std::uint64_t))
             {
                 if(value > std::numeric_limits<std::uint64_t>::max())
-                    throw std::overflow_error(std::string{"GEMM: value does not fit 64 bits: "} + what);
+                    throw std::invalid_argument(std::string{"GEMM: value does not fit 64 bits: "} + what);
             }
             return static_cast<std::uint64_t>(value);
         }
@@ -204,7 +206,7 @@ namespace alpaka::onHost
             std::uint64_t const bytes = storedSpanBytes(view, what);
             auto const begin = reinterpret_cast<std::uintptr_t>(view.data);
             if(bytes > std::numeric_limits<std::uintptr_t>::max() - begin)
-                throw std::overflow_error(std::string{"GEMM: address range overflow for "} + what);
+                throw std::invalid_argument(std::string{"GEMM: address range overflow for "} + what);
             return ByteRange{begin, begin + static_cast<std::uintptr_t>(bytes)};
         }
 
@@ -282,6 +284,7 @@ namespace alpaka::onHost
         /** Split the output tiles into the four disjoint regions of the design guide. */
         inline TileRegions splitRegions(std::uint64_t m, std::uint64_t n, std::uint32_t bm, std::uint32_t bn)
         {
+            ALPAKA_ASSERT(bm != 0u && bn != 0u);
             std::uint64_t const tileRows = ceilDiv(m, bm, "tile row count");
             std::uint64_t const tileCols = ceilDiv(n, bn, "tile column count");
             std::uint64_t const fullRows = m / bm;
@@ -351,7 +354,7 @@ namespace alpaka::onHost
             std::uint64_t const maxTiles
                 = checkedMul(ceilDiv(m, 4u, "launch tile rows"), ceilDiv(n, 4u, "launch tile columns"), "tile count");
             if(maxTiles > std::numeric_limits<std::uint32_t>::max())
-                throw std::overflow_error("GEMM: tile count does not fit the 32-bit launch description");
+                throw std::invalid_argument("GEMM: tile count does not fit the 32-bit launch description");
             if(m != 0u && n != 0u && !readOperands && !betaIsOne)
             {
                 // A scale-only launch uses the same grid; keep the K-step arithmetic in range explicitly.
@@ -359,9 +362,9 @@ namespace alpaka::onHost
             }
             return writeOutput;
         }
-    } // namespace gemmInternal
+    } // namespace internal
 
-    namespace gemmInternal
+    namespace internal
     {
         template<
             std::uint32_t T_BM,
@@ -573,99 +576,5 @@ namespace alpaka::onHost
                 dispatchScaleTile<blockThreads>(config, queue, exec, c, m, n, beta, config);
             }
         }
-    } // namespace gemmInternal
-
-    /** Enqueue C := alpha * op(A) * op(B) + beta * C on the given queue.
-     *
-     * The operation follows the queue's asynchronous semantics: the call only enqueues work and returns. The caller
-     * keeps the view storage alive until the queue has completed the operation.
-     *
-     * @tparam T_Queue queue type
-     * @tparam T_Exec executor type
-     * @param queue queue the work is enqueued on
-     * @param exec executor used for the launch
-     * @param c output view, logically M x N, op must be none
-     * @param a operand A, logically M x K
-     * @param b operand B, logically K x N
-     * @param alpha scalar multiplier of op(A) * op(B)
-     * @param beta scalar multiplier of the incoming C
-     * @param mode numerical mode, defaults to strict FP32
-     *
-     * @throws std::invalid_argument for invalid dimensions, layouts, modes or overlapping storage
-     * @throws std::overflow_error when dimensions, pitches, address ranges or launch counts overflow 64-bit checked
-     *         arithmetic
-     */
-    template<
-        typename T_Queue,
-        alpaka::concepts::Executor T_Exec,
-        typename T_C,
-        typename T_A,
-        typename T_B,
-        typename T_Alpha,
-        typename T_Beta>
-    void gemm(
-        T_Queue const& queue,
-        T_Exec const& exec,
-        GemmView<T_C> c,
-        GemmView<T_A> a,
-        GemmView<T_B> b,
-        T_Alpha alpha,
-        T_Beta beta,
-        GemmNumericMode mode = GemmNumericMode::fp32)
-    {
-        static_assert(std::is_arithmetic_v<std::remove_cv_t<T_Alpha>>, "alpha must be an arithmetic scalar");
-        static_assert(std::is_arithmetic_v<std::remove_cv_t<T_Beta>>, "beta must be an arithmetic scalar");
-
-        // The accumulator type is also the type the kernel uses to read alpha, beta and the old C value, so a
-        // mismatch here would silently change the arithmetic rather than fail. Check the complete mode signature
-        // before anything is enqueued and name the required storage in the error.
-        auto const execute = [&]<typename T_Acc, typename T_AStorage, typename T_BStorage>(char const* requirement)
-        {
-            using CType = std::remove_cv_t<T_C>;
-            using AType = std::remove_cv_t<T_A>;
-            using BType = std::remove_cv_t<T_B>;
-            if constexpr(
-                std::same_as<CType, T_Acc> && std::same_as<AType, T_AStorage> && std::same_as<BType, T_BStorage>)
-            {
-                gemmInternal::executeGemm<T_Acc>(queue, exec, c, a, b, alpha, beta);
-            }
-            else
-            {
-                throw std::invalid_argument(
-                    std::string{"GEMM: numerical mode does not match the view value types; "} + requirement);
-            }
-        };
-
-        switch(mode)
-        {
-        case GemmNumericMode::fp32:
-            execute.template operator()<float, float, float>("fp32 requires float storage for C, A and B");
-            break;
-        case GemmNumericMode::fp64:
-            execute.template operator()<double, double, double>("fp64 requires double storage for C, A and B");
-            break;
-        case GemmNumericMode::fp16ToFp32:
-            execute.template operator()<float, Float16, Float16>(
-                "fp16ToFp32 requires float C and Float16 A/B storage");
-            break;
-        case GemmNumericMode::bf16ToFp32:
-            execute.template operator()<float, BFloat16, BFloat16>(
-                "bf16ToFp32 requires float C and BFloat16 A/B storage");
-            break;
-        }
-    }
-
-    /** Enqueue GEMM with the device's default executor. */
-    template<typename T_Queue, typename T_C, typename T_A, typename T_B, typename T_Alpha, typename T_Beta>
-    void gemm(
-        T_Queue const& queue,
-        GemmView<T_C> c,
-        GemmView<T_A> a,
-        GemmView<T_B> b,
-        T_Alpha alpha,
-        T_Beta beta,
-        GemmNumericMode mode = GemmNumericMode::fp32)
-    {
-        gemm(queue, onHost::defaultExecutor(queue.getDevice()), c, a, b, alpha, beta, mode);
-    }
+    } // namespace internal
 } // namespace alpaka::onHost

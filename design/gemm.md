@@ -406,14 +406,13 @@ Reviewer: none yet. Verdict: pending. No independent review of this design has o
 
 ## 18 M2 as implemented
 
-M2 adds the first correct common-source GEMM. It is a direct-load implementation with no shared-memory staging, no layout engine, no planner and no native matrix instruction. The public host entry point is
+M2 adds the first correct common-source GEMM. It is a direct-load implementation with no shared-memory staging, no layout engine, no planner and no native matrix instruction. The public host header is `include/alpaka/onHost/algo/gemm.hpp`, the host-side implementation lives in `include/alpaka/onHost/algo/internal/gemm.hpp`, and the common-source kernels are in `include/alpaka/onAcc/gemm.hpp`. The public host entry point is
 
 ```cpp
-template<typename T_Queue, alpaka::concepts::Executor T_Exec, typename T_C, typename T_A, typename T_B,
-         typename T_Alpha, typename T_Beta>
+template<typename T_Queue, typename T_C, typename T_A, typename T_B, typename T_Alpha, typename T_Beta>
 void alpaka::onHost::gemm(
     T_Queue const& queue,
-    T_Exec const& exec,
+    alpaka::concepts::Executor auto const exec,
     GemmView<T_C> c,
     GemmView<T_A> a,
     GemmView<T_B> b,
@@ -421,6 +420,8 @@ void alpaka::onHost::gemm(
     T_Beta beta,
     GemmNumericMode mode = GemmNumericMode::fp32);
 ```
+
+The executor is optional. An overload without the executor, and the value `alpaka::exec::anyExecutor`, select the queue device's default executor. User-misuse checks throw `std::invalid_argument`, and internal invariants use `ALPAKA_ASSERT`.
 
 `GemmView<T>` carries the logical rows/cols, leading dimension, row-major or column-major layout and the none/transpose flag. The call validates dimensions, leading dimensions, overlapping C/A or C/B storage, null pointers of views that are actually read or written, and checked 64-bit size and launch arithmetic before it enqueues anything. All four numeric modes are implemented. `fp16ToFp32` requires `alpaka::Float16` A/B storage and `bf16ToFp32` requires `alpaka::BFloat16`; both store C as FP32, convert the stored operand to FP32 exactly inside the common kernel, and accumulate in FP32. The mode and the view value types must agree. A mismatch, including FP32 operands passed with a mixed-mode tag or one 16-bit storage type used for the other mode's tag, throws before launch. The two 16-bit types are never treated as interchangeable and no backend branch performs the conversion.
 

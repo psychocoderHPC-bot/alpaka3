@@ -819,7 +819,7 @@ TEMPLATE_LIST_TEST_CASE("gemm host validation rejects invalid problems", "[gemm]
         auto c = makeView(onHost::data(dC), 2u, 2u, huge, onHost::GemmLayout::rowMajor, onHost::GemmOp::none);
         auto a = makeView(onHost::data(dA), 2u, 4u, 4u, onHost::GemmLayout::rowMajor, onHost::GemmOp::none);
         auto b = makeView(onHost::data(dB), 4u, 2u, 2u, onHost::GemmLayout::rowMajor, onHost::GemmOp::none);
-        CHECK_THROWS_AS(onHost::gemm(queue, exec, c, a, b, 1.0f, 0.0f), std::overflow_error);
+        CHECK_THROWS_AS(onHost::gemm(queue, exec, c, a, b, 1.0f, 0.0f), std::invalid_argument);
     }
 
     SECTION("mixed modes reject matching storage inconsistently")
