@@ -131,7 +131,7 @@ namespace alpaka::onAcc::gemm::pipeline
      * so exactly `max(0, L - S)` refills remain. Each refill belongs to one steady-state consume, and the final
      * `min(S, L)` consumes run in the drain phase.
      */
-    constexpr PhaseCounts scheduleCounts(std::uint64_t tiles, std::uint32_t stages) noexcept
+    ALPAKA_FN_HOST constexpr PhaseCounts scheduleCounts(std::uint64_t tiles, std::uint32_t stages) noexcept
     {
         ALPAKA_ASSERT_ACC(stages > 0u);
         std::uint64_t const stageCount = static_cast<std::uint64_t>(stages);

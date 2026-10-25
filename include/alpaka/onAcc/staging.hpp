@@ -98,23 +98,23 @@ namespace alpaka::onAcc::staging
         }
 
         /** Token for the acquisition at the given ring position. Valid for issued positions and the next one. */
-        constexpr Token tokenOf(std::uint64_t issueIndex) const
+        ALPAKA_FN_HOST_ACC constexpr Token tokenOf(std::uint64_t issueIndex) const
         {
             return Token{stageOf(issueIndex), generationOf(issueIndex)};
         }
 
-        constexpr std::uint64_t issuedCount() const
+        ALPAKA_FN_HOST_ACC constexpr std::uint64_t issuedCount() const
         {
             return issued;
         }
 
-        constexpr std::uint64_t generation(std::uint32_t stageIndex) const
+        ALPAKA_FN_HOST_ACC constexpr std::uint64_t generation(std::uint32_t stageIndex) const
         {
             ALPAKA_ASSERT_ACC(stageIndex < T_stages);
             return slots[stageIndex].generation;
         }
 
-        constexpr bool allFree() const
+        ALPAKA_FN_HOST_ACC constexpr bool allFree() const
         {
             for(std::uint32_t i = 0u; i < T_stages; ++i)
                 if(slots[i].phase != Phase::free)
@@ -123,7 +123,7 @@ namespace alpaka::onAcc::staging
         }
 
         /** Claim the next stage. False when the ring is not in the expected state (overwrite before release). */
-        constexpr bool tryAcquire(Token& out)
+        ALPAKA_FN_HOST_ACC constexpr bool tryAcquire(Token& out)
         {
             Token const next = tokenOf(issued);
             Slot& slot = slots[next.stage];
@@ -135,7 +135,7 @@ namespace alpaka::onAcc::staging
             return true;
         }
 
-        constexpr Token acquire()
+        ALPAKA_FN_HOST_ACC constexpr Token acquire()
         {
             Token token{};
             bool const acquired = tryAcquire(token);
@@ -145,7 +145,7 @@ namespace alpaka::onAcc::staging
         }
 
         /** Publish the filled generation. The caller must issue the visibility barrier afterwards. */
-        constexpr bool tryCommit(Token token)
+        ALPAKA_FN_HOST_ACC constexpr bool tryCommit(Token token)
         {
             Slot& slot = slots[token.stage];
             if(slot.phase != Phase::filling || slot.generation != token.generation)
@@ -154,7 +154,7 @@ namespace alpaka::onAcc::staging
             return true;
         }
 
-        constexpr void commit(Token token)
+        ALPAKA_FN_HOST_ACC constexpr void commit(Token token)
         {
             bool const ok = tryCommit(token);
             ALPAKA_ASSERT_ACC(ok);
@@ -162,13 +162,13 @@ namespace alpaka::onAcc::staging
         }
 
         /** Whether the given generation is committed and not stale. */
-        constexpr bool tryWait(Token token) const
+        ALPAKA_FN_HOST_ACC constexpr bool tryWait(Token token) const
         {
             Slot const& slot = slots[token.stage];
             return slot.phase == Phase::ready && slot.generation == token.generation;
         }
 
-        constexpr void waitReady(Token token) const
+        ALPAKA_FN_HOST_ACC constexpr void waitReady(Token token) const
         {
             bool const ok = tryWait(token);
             ALPAKA_ASSERT_ACC(ok);
@@ -176,7 +176,7 @@ namespace alpaka::onAcc::staging
         }
 
         /** Begin reading a ready generation. */
-        constexpr bool tryConsume(Token token)
+        ALPAKA_FN_HOST_ACC constexpr bool tryConsume(Token token)
         {
             if(!tryWait(token))
                 return false;
@@ -184,7 +184,7 @@ namespace alpaka::onAcc::staging
             return true;
         }
 
-        constexpr void consume(Token token)
+        ALPAKA_FN_HOST_ACC constexpr void consume(Token token)
         {
             bool const ok = tryConsume(token);
             ALPAKA_ASSERT_ACC(ok);
@@ -192,7 +192,7 @@ namespace alpaka::onAcc::staging
         }
 
         /** Signal that this worker finished reading. The caller must issue the release barrier afterwards. */
-        constexpr bool tryComplete(Token token)
+        ALPAKA_FN_HOST_ACC constexpr bool tryComplete(Token token)
         {
             Slot& slot = slots[token.stage];
             if(slot.phase != Phase::consuming || slot.generation != token.generation)
@@ -201,7 +201,7 @@ namespace alpaka::onAcc::staging
             return true;
         }
 
-        constexpr void complete(Token token)
+        ALPAKA_FN_HOST_ACC constexpr void complete(Token token)
         {
             bool const ok = tryComplete(token);
             ALPAKA_ASSERT_ACC(ok);
@@ -209,7 +209,7 @@ namespace alpaka::onAcc::staging
         }
 
         /** Return a completed generation to the free list. */
-        constexpr bool tryRelease(Token token)
+        ALPAKA_FN_HOST_ACC constexpr bool tryRelease(Token token)
         {
             Slot& slot = slots[token.stage];
             if(slot.phase != Phase::completed || slot.generation != token.generation)
@@ -218,7 +218,7 @@ namespace alpaka::onAcc::staging
             return true;
         }
 
-        constexpr void release(Token token)
+        ALPAKA_FN_HOST_ACC constexpr void release(Token token)
         {
             bool const ok = tryRelease(token);
             ALPAKA_ASSERT_ACC(ok);
@@ -258,20 +258,20 @@ namespace alpaka::onAcc::staging
         Tracker tracker{};
         T* storage{};
 
-        constexpr T* panel(Token token) const
+        ALPAKA_FN_HOST_ACC constexpr T* panel(Token token) const
         {
             ALPAKA_ASSERT_ACC(token.stage < T_stages);
             return storage + static_cast<std::uint64_t>(token.stage) * T_elements;
         }
 
-        Token acquire()
+        ALPAKA_FN_HOST_ACC Token acquire()
         {
             return tracker.acquire();
         }
 
         /** Publish a filled panel to every consumer in the block. */
         template<typename T_Acc>
-        void commit(T_Acc const& acc, Token token)
+        ALPAKA_FN_HOST_ACC void commit(T_Acc const& acc, Token token)
         {
             tracker.commit(token);
             onAcc::syncBlockThreads(acc);
@@ -279,26 +279,26 @@ namespace alpaka::onAcc::staging
 
         /** The synchronous policy publishes in commit(), so waiting only validates the generation. */
         template<typename T_Acc>
-        void waitReady(T_Acc const& acc, Token token) const
+        ALPAKA_FN_HOST_ACC void waitReady(T_Acc const& acc, Token token) const
         {
             alpaka::unused(acc);
             tracker.waitReady(token);
         }
 
-        void consume(Token token)
+        ALPAKA_FN_HOST_ACC void consume(Token token)
         {
             tracker.consume(token);
         }
 
         /** Publish that this worker finished reading the panel before the stage may be refilled. */
         template<typename T_Acc>
-        void complete(T_Acc const& acc, Token token)
+        ALPAKA_FN_HOST_ACC void complete(T_Acc const& acc, Token token)
         {
             tracker.complete(token);
             onAcc::syncBlockThreads(acc);
         }
 
-        void release(Token token)
+        ALPAKA_FN_HOST_ACC void release(Token token)
         {
             tracker.release(token);
         }
