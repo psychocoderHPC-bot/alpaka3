@@ -187,8 +187,7 @@ namespace
         INFO("width pass2  : " << widths[1]);
         INFO("width pass3  : " << widths[2]);
 
-        if constexpr(
-            archSimdWidthFor<std::uint8_t, FakeHostAcc>() != archSimdWidthFor<int32_t, FakeHostAcc>())
+        if constexpr(archSimdWidthFor<std::uint8_t, FakeHostAcc>() != archSimdWidthFor<int32_t, FakeHostAcc>())
         {
             // The passes must really use different widths, otherwise this case would not check cross-width storage
             // stability.
@@ -214,8 +213,10 @@ TEST_CASE("lockstep audit compile-time invariants", "[kernel][lockstep][audit]")
     static_assert(std::is_same_v<onAcc::internal::BindValueType_t<ALPAKA_TYPEOF(onAcc::map(dataSource, 1))>, int32_t>);
 
     // --- The scope stores the accelerator by reference, so the scope cannot detach from its lifetime ---
-    using Scope = decltype(
-        onAcc::makeLockstep(std::declval<FakeHostAcc const&>(), StaticWorkerGroup<4u>{}, CVec<uint32_t, 16u>{}));
+    using Scope = decltype(onAcc::makeLockstep(
+        std::declval<FakeHostAcc const&>(),
+        StaticWorkerGroup<4u>{},
+        CVec<uint32_t, 16u>{}));
     static_assert(std::is_same_v<typename Scope::AcceleratorStorage, FakeHostAcc const&>);
     static_assert(std::is_reference_v<typename Scope::AcceleratorStorage>);
 
@@ -228,16 +229,16 @@ TEST_CASE("lockstep audit compile-time invariants", "[kernel][lockstep][audit]")
     // --- divCeil slot assignment ---
     // Any change to the divCeil-based slot partition breaks these values; the runtime storage-layout case below then
     // observes mismatched elements.
-    static_assert(onAcc::internal::LockstepVar<int32_t, CVec<uint32_t, 97u>, CVec<uint32_t, 4u>>::numSlotsPerWorker
-                  == 25u);
-    static_assert(onAcc::internal::LockstepVar<int32_t, CVec<uint32_t, 8u>, CVec<uint32_t, 4u>>::numSlotsPerWorker
-                  == 2u);
-    static_assert(onAcc::internal::LockstepVar<int32_t, CVec<uint32_t, 5u>, CVec<uint32_t, 16u>>::numSlotsPerWorker
-                  == 1u);
-    static_assert(onAcc::internal::LockstepVar<int32_t, CVec<uint32_t, 4u>, CVec<uint32_t, 4u>>::numSlotsPerWorker
-                  == 1u);
-    static_assert(onAcc::internal::LockstepVar<int32_t, CVec<uint32_t, 1u>, CVec<uint32_t, 4u>>::numSlotsPerWorker
-                  == 1u);
+    static_assert(
+        onAcc::internal::LockstepVar<int32_t, CVec<uint32_t, 97u>, CVec<uint32_t, 4u>>::numSlotsPerWorker == 25u);
+    static_assert(
+        onAcc::internal::LockstepVar<int32_t, CVec<uint32_t, 8u>, CVec<uint32_t, 4u>>::numSlotsPerWorker == 2u);
+    static_assert(
+        onAcc::internal::LockstepVar<int32_t, CVec<uint32_t, 5u>, CVec<uint32_t, 16u>>::numSlotsPerWorker == 1u);
+    static_assert(
+        onAcc::internal::LockstepVar<int32_t, CVec<uint32_t, 4u>, CVec<uint32_t, 4u>>::numSlotsPerWorker == 1u);
+    static_assert(
+        onAcc::internal::LockstepVar<int32_t, CVec<uint32_t, 1u>, CVec<uint32_t, 4u>>::numSlotsPerWorker == 1u);
 
     // --- SIMD width clamping ---
     // workers > logical elements: at most one element per worker, so the width must clamp to 1.
