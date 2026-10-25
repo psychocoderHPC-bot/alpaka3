@@ -470,3 +470,31 @@ Survivors are ranked by the section 6.3 models only: useful-work fraction, input
 ### Overrides and defaults
 
 The advanced entry point accepts `std::optional<GemmPlan>` after the staging configuration. An explicit plan runs the same `validatePlan` as an automatic candidate and throws `std::invalid_argument` with the exact reason when it is illegal, outside the compiled family, or inappropriate for the problem. An explicit `GemmStagingConfig` restricts selection to that policy and stage count; the shipped automatic default remains the compile-time `defaultGemmStaging` (direct), so existing behaviour and the explicit cooperative override are preserved. Diagnostics (`PlanDiagnostics`) report the facts used, missing facts, engine, selected plan, tile and thread shape, staging bytes, numerical mode, per-candidate rejection reasons, fallback reason and override use. The planner was validated host-only; heuristic quality (G4) is measured later on hardware, not in this change.
+
+## 20 M6 as implemented
+
+M6 moves the bounded K-block schedule out of the kernel body into `include/alpaka/onAcc/gemmPipeline.hpp`. The register-blocked staged path and the direct path share the same arithmetic. Only the staged path runs through the pipeline; the direct path keeps its existing loop. Selection is unchanged: `GemmStaging::cooperative` with a stage count in {1,2,3} uses the pipeline, and the automatic default remains direct.
+
+### Phase model
+
+With `F` full K tiles, `R` the optional partial tile, `L = F + (R ? 1 : 0)` and `S` stages:
+
+- `prologue` fills `min(S, L)` distinct slots with `acquire -> fill -> commit`. Invariant: no slot is acquired twice before it has been released.
+- `steadyState` consumes tile `i` and then refills `i + S`. Invariant: tile `i` reads the generation of `tokenOf(i)`; the slot is released before `i + S` is acquired; every refill has one matching steady-state consume.
+- `drain` consumes the last `min(S, L)` tiles without a refill. Invariant: every slot ends free and `issued == L`.
+- Phase counts are closed-form: `L` fills, waits, computes, completes and releases; `max(0, L - S)` refills and steady-state consumes; `min(S, L)` drain consumes. `pipeline::scheduleCounts()` exposes these counts and the tests compare them exactly.
+- `pipeline::Phase` and the `fill`/`compute` callback phase argument make the phase visible to tests and diagnostics.
+
+### Generation rules
+
+Tokens are the existing `staging::StageTracker` tokens with `(stageIndex, generation)`. Commit, wait, consume, complete and release keep the M4 generation checks. A token whose generation is not current is rejected, and a completion for generation `g` cannot release a slot that has been refilled for `g + 1`. `acquire` rejects a slot that is not free, so no slot is overwritten before all readers completed.
+
+### Async hook
+
+`pipeline::StagePolicy::asynchronous` exists and runs the identical synchronous schedule. `PolicyTraits::asyncRequested` records the request and `asyncActive` remains false. The public `GemmStaging::asynchronous` policy is accepted and resolves to the cooperative pipeline, so it is selectable today with identical results. No native copy, backend branch or new synchronization primitive was added. It activates only when a capable, tested copy primitive is available.
+
+### Tests and evidence
+
+`test/unit/algorithm/gemm_pipeline.cpp` runs 19 `(L, S)` pairs for `S = 1, 2, 3`, including a partial-only case (`F = 0`), `S - 1`, `S`, `S + 1`, exact multiples, `2S + 1` and `L = 7`, under both policies. It checks phase counts, per-slot generation monotonicity, no read before ready, no overwrite before release, matched commit/consume and the drain invariant. Illegal transitions are asserted rejected. A stalled producer fails through the harness progress cap instead of hanging. Real CPU execution covers partial M/N/K tiles for `S = 1, 2, 3` and all four numerical modes, serial and OpenMP, against the frozen reference and bounds; the four worst scaled errors are unchanged.
+
+Still required: profiler evidence that a real asynchronous copy overlaps transfer with compute; vendor async primitives and their capability/alignment facts; and hardware validation of the pipeline on GPU executors. None of these is claimed here. The test model is not a proof of device memory ordering.
