@@ -309,10 +309,11 @@ namespace alpaka::onHost::internal
      *   same grid therefore yields many workers on a GPU and collapses to the one-worker group on
      *   a CPU, without a backend branch.
      *
-     * `BK` runs over the {8, 16, 32} multiples of the operation K quantum. Direct and cooperative
-     * variants are generated; cooperative plans stay in the family so an explicit request or a
-     * future measured policy can select them. The group order puts the minimal direct fallback
-     * first, and `maxPlanCandidates` bounds the family.
+     * Direct plans use the {8, 16} multiples of the operation K quantum because they have no panel
+     * refill. Cooperative reuse plans use {8, 16} with one or two stages and 32 with one stage: a
+     * 32-quantum panel pair with two stages already exceeds the smallest block-shared limit this
+     * planner models, so the legal single-stage variant is the useful large-K member. The group
+     * order puts the minimal direct fallback first, and `maxPlanCandidates` bounds the family.
      */
     constexpr GemmCandidateFamily buildCandidateFamily(
         std::uint32_t simdWidth,
@@ -335,7 +336,9 @@ namespace alpaka::onHost::internal
         };
 
         constexpr std::array<std::uint32_t, 4> threadRows{1u, 2u, 4u, maxRegisterTileRows};
-        constexpr std::array<std::uint32_t, 3> kMultiples{8u, 16u, 32u};
+        // Direct plans keep K blocks {8, 16}: the direct kernel has no panel refill, so a larger
+        // K block only regroups the same outer loop and cannot change the score.
+        constexpr std::array<std::uint32_t, 2> directKMultiples{8u, 16u};
         // Reuse-oriented worker grids. For V=4 with TM=8 and TN=2V they describe block tiles
         // 16x16, 32x32, 64x64, 64x128, 128x64 and 128x128. The thread count is the grid product,
         // so the build-time limit and the runtime legality check prune grids the target cannot run.
@@ -381,18 +384,18 @@ namespace alpaka::onHost::internal
         // Small direct group. Index zero is the minimal fallback: TM = 1, TN = V, one worker,
         // BK = 8 quanta, direct loads.
         for(std::uint32_t threadM : threadRows)
-            for(std::uint32_t multiplier : kMultiples)
+            for(std::uint32_t multiplier : directKMultiples)
                 add(make(threadM, width, 1u, 1u, quantum * multiplier, GemmStaging::direct, 1u));
 
         // Wide direct group: the previous skinny-N plans. The worker-column count is clamped, so a
         // one-thread target collapses these candidates onto the small group by deduplication.
         std::uint32_t const wideWorkers = std::min<std::uint32_t>(16u, threadLimit);
-        for(std::uint32_t multiplier : kMultiples)
+        for(std::uint32_t multiplier : directKMultiples)
             add(make(maxRegisterTileRows, width, 1u, wideWorkers, quantum * multiplier, GemmStaging::direct, 1u));
 
         // Reuse-oriented direct group: largest per-worker tile and a multi-worker block tile.
         for(auto const& [workerRows, workerCols] : reuseGrids)
-            for(std::uint32_t multiplier : kMultiples)
+            for(std::uint32_t multiplier : directKMultiples)
                 addWhenItFits(make(
                     maxRegisterTileRows,
                     2u * width,
@@ -410,6 +413,7 @@ namespace alpaka::onHost::internal
                 add(make(threadM, width, 1u, 1u, quantum * 8u, GemmStaging::cooperative, stages));
 
         for(auto const& [workerRows, workerCols] : reuseGrids)
+        {
             for(std::uint32_t multiplier : std::array<std::uint32_t, 2>{8u, 16u})
                 for(std::uint32_t stages : std::array<std::uint32_t, 2>{1u, 2u})
                     addWhenItFits(make(
@@ -420,6 +424,18 @@ namespace alpaka::onHost::internal
                         quantum * multiplier,
                         GemmStaging::cooperative,
                         stages));
+            // The largest K block uses one stage. A second 32-quantum panel pair already exceeds
+            // the smallest block-shared limit the planner models, and keeping one variant leaves
+            // room for every reuse grid under maxPlanCandidates.
+            addWhenItFits(make(
+                maxRegisterTileRows,
+                2u * width,
+                workerRows,
+                workerCols,
+                quantum * 32u,
+                GemmStaging::cooperative,
+                1u));
+        }
 
         return family;
     }
@@ -516,14 +532,16 @@ namespace alpaka::onHost::internal
         // blocks onto dozens of processors. The schedule factor is a capability ratio built from the
         // reported processor count, not a backend identity, so a single-thread CPU host is
         // unaffected and a many-processor GPU keeps its larger tiles only where enough output tiles
-        // remain.
+        // remain. Saturation at three quarters of the processor count treats one partial wave as a
+        // filled machine; a linear ratio otherwise punishes a 128x128 tile whose 64 blocks leave a
+        // handful of processors idle even though the block tile reuses far more operand data.
         double parallelFraction = 1.0;
         if(problem.m != 0u && problem.n != 0u && facts.multiProcessorCount.known())
         {
             double const processors = std::max(1.0, static_cast<double>(facts.multiProcessorCount.get()));
             double const tiles = static_cast<double>(ceilDivU64(problem.m, plan.tileM))
                                  * static_cast<double>(ceilDivU64(problem.n, plan.tileN));
-            parallelFraction = std::clamp(tiles / processors, 0.0, 1.0);
+            parallelFraction = std::clamp(tiles / (0.75 * processors), 0.0, 1.0);
         }
 
         double stagingPressure = 0.0;
@@ -548,6 +566,7 @@ namespace alpaka::onHost::internal
         // a 32x32 tile (16 workers) stays direct, while a 64x64 tile (64 workers) and larger keep
         // their measured cooperative advantage.
         double sharingFraction = 0.0;
+        double refillSaving = 0.0;
         if(plan.policy == GemmStaging::cooperative)
         {
             double const workers = static_cast<double>(plan.workerRows) * static_cast<double>(plan.workerCols);
@@ -559,10 +578,24 @@ namespace alpaka::onHost::internal
             // occupies the machine; a one-tile launch or a tiny problem keeps the direct path.
             double const coverage = (bm > 0.0 ? effectiveM / bm : 0.0) * (bn > 0.0 ? effectiveN / bn : 0.0);
             sharingFraction = ramp * saving * coverage * parallelFraction;
+
+            // Every cooperative K block ends in one panel refill and one block-wide barrier. The
+            // refill count per K element is 1/kBlock, so a plan that doubles the K block halves that
+            // fixed cost. Normalise the saving to the smallest K block in the family (eight K
+            // quanta). Small worker grids do not amortise a refill barrier, so the same ramp and
+            // coverage gate as the sharing credit applies; a direct plan has no refill barrier.
+            if(bk > 0.0)
+            {
+                double const smallestKBlock
+                    = 8.0
+                      * static_cast<double>(
+                          std::max<std::uint32_t>(facts.kQuantum.known() ? facts.kQuantum.get() : 1u, 1u));
+                refillSaving = std::clamp(1.0 - smallestKBlock / bk, 0.0, 1.0) * ramp * coverage * parallelFraction;
+            }
         }
 
         return 0.36 * usefulFraction + 0.22 * aiNorm + 0.12 * (1.0 - transferNorm) + 0.12 * parallelFraction
-               + 0.08 * (1.0 - pressure) + 0.10 * sharingFraction;
+               + 0.08 * (1.0 - pressure) + 0.10 * sharingFraction + 0.10 * refillSaving;
     }
 
     /** Validate one plan with the checks the launcher relies on.

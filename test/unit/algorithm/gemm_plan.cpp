@@ -266,6 +266,36 @@ TEST_CASE("gemm plan chooses the register-filling tile for compute-heavy shapes"
     }
 }
 
+TEST_CASE("gemm plan raises the cooperative K block for a large shape", "[gemm][plan][kblock]")
+{
+    TargetProfile const& target = targetProfiles[2];
+    ModeInfo const& mode = modes[0];
+    GemmFacts const facts = makeFacts(target, mode);
+    GemmCandidateFamily const family = familyOf(facts);
+
+    GemmProblem const large = makeProblem(mode, 2048u, 2048u, 2048u);
+    PlanSelection const selected = selectPlan(large, facts, family);
+    CHECK(selected.plan.policy == onHost::GemmStaging::cooperative);
+    CHECK(selected.plan.tileM == 128u);
+    CHECK(selected.plan.tileN == 128u);
+    CHECK(selected.plan.kBlock == 32u);
+    CHECK(selected.plan.stages == 1u);
+
+    // The small shape keeps the direct plan and its smallest K block.
+    GemmProblem const small = makeProblem(mode, 256u, 256u, 256u);
+    PlanSelection const smallSelected = selectPlan(small, facts, family);
+    CHECK(smallSelected.plan.policy == onHost::GemmStaging::direct);
+    CHECK(smallSelected.plan.kBlock == 8u);
+
+    // The largest K block is offered with one stage only, so every member is inside the cap.
+    for(std::size_t i = 0; i < family.size; ++i)
+    {
+        GemmPlan const& plan = family.candidates[i];
+        if(plan.policy == onHost::GemmStaging::cooperative && plan.kBlock == 32u)
+            CHECK(plan.stages == 1u);
+    }
+}
+
 TEST_CASE("gemm plan works with minimal facts", "[gemm][plan]")
 {
     TargetProfile const& target = targetProfiles[0];

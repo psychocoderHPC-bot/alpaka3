@@ -171,9 +171,10 @@ namespace alpaka::onHost
 
         /** Choose tile, K step and block size from compiled traits and the problem shape.
          *
-         * The set of tile variants is a bounded compile-time family {4,8,16,32}; BK is {8,16}. No device name and no
-         * backend identity participates in the decision. A problem smaller than four rows or columns keeps the 4x4
-         * fallback, so width-one and tiny shapes always have a correct path.
+         * The set of tile variants is a bounded compile-time family {4,8,16,32}; the register-blocked planner uses
+         * BK {8,16} for direct plans and up to 32 for cooperative reuse. No device name and no backend identity
+         * participates in the decision. A problem smaller than four rows or columns keeps the 4x4 fallback, so
+         * width-one and tiny shapes always have a correct path.
          */
         template<typename T_Acc, typename T_Api, typename T_DeviceKind, typename T_Exec>
         TileConfig chooseTileConfig(std::uint64_t m, std::uint64_t n, T_Api, T_DeviceKind, T_Exec)
