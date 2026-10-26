@@ -199,14 +199,16 @@ namespace alpaka::onHost
         /** The compiled candidate family for one operation, accumulator type, target and executor.
          *
          * The family is constexpr: its size and every plan field are known at compile time, so the launcher can
-         * dispatch to a selected plan without making any problem dimension a template argument. On a target whose
-         * block-thread limit is one the worker-column axis collapses and the family holds 32 entries; otherwise it
-         * holds the full 64. `buildCandidateFamily` enforces the cap.
+         * dispatch to a selected plan without making any problem dimension a template argument. The worker-grid
+         * axis is bounded by the executor's compile-time block-thread capability, not by the heuristic launch block
+         * size, so a GPU exposes the larger reuse tiles while a one-thread host executor collapses them. The family
+         * therefore keeps the small fallback and the wide plans on every target and adds the larger tiles only
+         * where their worker grids can be launched. `buildCandidateFamily` enforces the 64-entry cap.
          */
         template<typename T_Acc, typename T_Api, typename T_DeviceKind, typename T_Exec>
         inline constexpr GemmCandidateFamily gemmCandidateFamily = buildCandidateFamily(
             std::max<std::uint32_t>(getArchSimdWidth<T_Acc>(T_Api{}, T_DeviceKind{}), 1u),
-            blockThreadCount<T_Acc, T_Api, T_DeviceKind, T_Exec>(),
+            onHost::getMaxThreadsPerBlock(T_Api{}, T_DeviceKind{}, T_Exec{}),
             1u);
 
         /** Compile-time register-blocked plan.
@@ -241,10 +243,12 @@ namespace alpaka::onHost
 
         /** Compile-time configuration value for the default operand supply policy.
          *
-         * This is the single place that decides the shipped default. It stays `direct` until a planner milestone
-         * selects staging from measured costs, so enabling cooperative staging is an explicit expert choice today.
+         * This is the single place that decides the shipped default. It is `automatic`, so the planner ranks the
+         * direct and cooperative candidates of the family and picks the one whose score wins for the concrete
+         * problem. The sharing credit in `scorePlan` only applies to cooperative plans with enough workers to
+         * amortize the panel fill, so one-worker host plans and small block tiles continue to select direct.
          */
-        inline constexpr GemmStaging defaultGemmStaging = GemmStaging::direct;
+        inline constexpr GemmStaging defaultGemmStaging = GemmStaging::automatic;
 
         /** Whether cooperative staging fits and is expected to amortise its panel traffic.
          *

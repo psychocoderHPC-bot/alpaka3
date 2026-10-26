@@ -296,14 +296,23 @@ namespace alpaka::onHost::internal
 
     /** Build the bounded candidate family from dimensionless multiples of the compiled quanta.
      *
-     * Axes: per-worker rows TM in {1, 2, 4, maxRegisterTileRows} times the SIMD width in N (TN = V), worker
-     * columns WC in {1, 16} clamped to the block-thread limit, K block in {8, 16} multiples of the K quantum, and
-     * the operand-supply policy direct plus cooperative stage counts {1, 2, 3}. The largest candidate is therefore
-     * `TM = maxRegisterTileRows, TN = V`: at V=8 it holds 64 fp32 accumulators (eight YMM) and fills the vector
-     * register file, and it stays in the family at every width so the ranking can choose it. The product is exactly
-     * 64 candidates when both worker counts exist, and smaller after deduplication on a target whose block limit is
-     * one. The minimal fallback (`TM = 1`, `TN = V`, one worker, direct, K block = 8 quanta) is always the first
-     * entry, so width-one and tiny shapes have a correct plan.
+     * The family has three groups, all generated from compiled capabilities only:
+     *
+     * - a small direct group (`TN = V`, one worker) that contains the minimal fallback and the
+     *   width-one/tiny plans; it grows the per-worker row count `TM` in {1, 2, 4, 8};
+     * - a wide direct group (`TN = V`, `TM = 8`, worker columns up to 16) that keeps the previous
+     *   skinny-N plans;
+     * - a reuse-oriented group that pairs the largest per-worker tile (`TM = 8`, `TN = 2V`) with a
+     *   `WR x WC` worker grid. The grids are chosen so the legal block tiles cover 16x16, 32x32,
+     *   64x64, 64x128, 128x64 and 128x128 for a four-element SIMD width, and the legality check
+     *   prunes every plan whose worker count exceeds the target's block-thread capability. The
+     *   same grid therefore yields many workers on a GPU and collapses to the one-worker group on
+     *   a CPU, without a backend branch.
+     *
+     * `BK` runs over the {8, 16, 32} multiples of the operation K quantum. Direct and cooperative
+     * variants are generated; cooperative plans stay in the family so an explicit request or a
+     * future measured policy can select them. The group order puts the minimal direct fallback
+     * first, and `maxPlanCandidates` bounds the family.
      */
     constexpr GemmCandidateFamily buildCandidateFamily(
         std::uint32_t simdWidth,
@@ -326,49 +335,92 @@ namespace alpaka::onHost::internal
         };
 
         constexpr std::array<std::uint32_t, 4> threadRows{1u, 2u, 4u, maxRegisterTileRows};
-        constexpr std::array<std::uint32_t, 2> workerColumns{1u, 16u};
-        constexpr std::array<std::uint32_t, 2> kMultiples{8u, 16u};
+        constexpr std::array<std::uint32_t, 3> kMultiples{8u, 16u, 32u};
+        // Reuse-oriented worker grids. For V=4 with TM=8 and TN=2V they describe block tiles
+        // 16x16, 32x32, 64x64, 64x128, 128x64 and 128x128. The thread count is the grid product,
+        // so the build-time limit and the runtime legality check prune grids the target cannot run.
+        constexpr std::array<std::pair<std::uint32_t, std::uint32_t>, 6> reuseGrids{{
+            {2u, 2u},
+            {4u, 4u},
+            {8u, 8u},
+            {8u, 16u},
+            {16u, 8u},
+            {16u, 16u},
+        }};
 
         auto const make = [&](std::uint32_t threadM,
+                              std::uint32_t threadN,
+                              std::uint32_t workerRows,
                               std::uint32_t workerCols,
                               std::uint32_t kBlock,
                               GemmStaging policy,
                               std::uint32_t stages) constexpr
         {
             GemmPlan plan;
-            plan.tileM = threadM;
-            plan.tileN = width * workerCols;
+            plan.tileM = threadM * workerRows;
+            plan.tileN = threadN * workerCols;
             plan.threadM = threadM;
-            plan.threadN = width;
-            plan.workerRows = 1u;
+            plan.threadN = threadN;
+            plan.workerRows = workerRows;
             plan.workerCols = workerCols;
             plan.kBlock = kBlock;
             plan.stages = stages;
             plan.policy = policy;
             plan.kernel = GemmKernel::registerBlocked;
-            plan.threadCount = workerCols;
+            plan.threadCount = workerRows * workerCols;
             plan.simdWidth = width;
             return plan;
         };
 
-        // Direct first so that the minimal fallback (index 0) is always a direct plan.
-        for(std::uint32_t workerColsSeed : workerColumns)
+        auto const addWhenItFits = [&](GemmPlan const& candidate) constexpr
         {
-            std::uint32_t const workerCols = std::min(workerColsSeed, threadLimit);
-            for(std::uint32_t threadM : threadRows)
-                for(std::uint32_t multiplier : kMultiples)
-                    add(make(threadM, workerCols, quantum * multiplier, GemmStaging::direct, 1u));
-        }
-        for(std::uint32_t stages = 1u; stages <= 3u; ++stages)
-        {
-            for(std::uint32_t workerColsSeed : workerColumns)
-            {
-                std::uint32_t const workerCols = std::min(workerColsSeed, threadLimit);
-                for(std::uint32_t threadM : threadRows)
-                    for(std::uint32_t multiplier : kMultiples)
-                        add(make(threadM, workerCols, quantum * multiplier, GemmStaging::cooperative, stages));
-            }
-        }
+            if(candidate.threadCount <= threadLimit)
+                add(candidate);
+        };
+
+        // Small direct group. Index zero is the minimal fallback: TM = 1, TN = V, one worker,
+        // BK = 8 quanta, direct loads.
+        for(std::uint32_t threadM : threadRows)
+            for(std::uint32_t multiplier : kMultiples)
+                add(make(threadM, width, 1u, 1u, quantum * multiplier, GemmStaging::direct, 1u));
+
+        // Wide direct group: the previous skinny-N plans. The worker-column count is clamped, so a
+        // one-thread target collapses these candidates onto the small group by deduplication.
+        std::uint32_t const wideWorkers = std::min<std::uint32_t>(16u, threadLimit);
+        for(std::uint32_t multiplier : kMultiples)
+            add(make(maxRegisterTileRows, width, 1u, wideWorkers, quantum * multiplier, GemmStaging::direct, 1u));
+
+        // Reuse-oriented direct group: largest per-worker tile and a multi-worker block tile.
+        for(auto const& [workerRows, workerCols] : reuseGrids)
+            for(std::uint32_t multiplier : kMultiples)
+                addWhenItFits(make(
+                    maxRegisterTileRows,
+                    2u * width,
+                    workerRows,
+                    workerCols,
+                    quantum * multiplier,
+                    GemmStaging::direct,
+                    1u));
+
+        // Cooperative variants. The one-worker group keeps every stage count legal on a
+        // thread-limited target; the reuse group offers one and two stages so a measured policy can
+        // pick staging for a block tile that actually amortizes the panel fill.
+        for(std::uint32_t threadM : std::array<std::uint32_t, 2>{1u, maxRegisterTileRows})
+            for(std::uint32_t stages = 1u; stages <= 3u; ++stages)
+                add(make(threadM, width, 1u, 1u, quantum * 8u, GemmStaging::cooperative, stages));
+
+        for(auto const& [workerRows, workerCols] : reuseGrids)
+            for(std::uint32_t multiplier : std::array<std::uint32_t, 2>{8u, 16u})
+                for(std::uint32_t stages : std::array<std::uint32_t, 2>{1u, 2u})
+                    addWhenItFits(make(
+                        maxRegisterTileRows,
+                        2u * width,
+                        workerRows,
+                        workerCols,
+                        quantum * multiplier,
+                        GemmStaging::cooperative,
+                        stages));
+
         return family;
     }
 
@@ -459,6 +511,21 @@ namespace alpaka::onHost::internal
         double const transferCost = macs > 0.0 ? panelBytes / macs : 1.0;
         double const transferNorm = transferCost / (transferCost + 1.0);
 
+        // Block-tile reuse only pays off when the grid still fills the machine. Without this term a
+        // 128x128 tile wins every compute-heavy shape, but a 256^2 problem would launch only four
+        // blocks onto dozens of processors. The schedule factor is a capability ratio built from the
+        // reported processor count, not a backend identity, so a single-thread CPU host is
+        // unaffected and a many-processor GPU keeps its larger tiles only where enough output tiles
+        // remain.
+        double parallelFraction = 1.0;
+        if(problem.m != 0u && problem.n != 0u && facts.multiProcessorCount.known())
+        {
+            double const processors = std::max(1.0, static_cast<double>(facts.multiProcessorCount.get()));
+            double const tiles = static_cast<double>(ceilDivU64(problem.m, plan.tileM))
+                                 * static_cast<double>(ceilDivU64(problem.n, plan.tileN));
+            parallelFraction = std::clamp(tiles / processors, 0.0, 1.0);
+        }
+
         double stagingPressure = 0.0;
         if(plan.policy == GemmStaging::cooperative && facts.sharedMemPerBlockBytes.known())
         {
@@ -474,7 +541,28 @@ namespace alpaka::onHost::internal
                                / static_cast<double>(registerBudget);
         double const pressure = std::clamp(0.5 * stagingPressure + 0.5 * registerPressure, 0.0, 1.0);
 
-        return 0.45 * usefulFraction + 0.25 * aiNorm + 0.15 * (1.0 - pressure) + 0.15 * (1.0 - transferNorm);
+        // Cooperative staging loads one A column panel and one B row panel per K step and shares them
+        // across the worker grid; a direct plan reloads the per-worker operands in every worker. The
+        // saving is therefore a capability ratio of the plan itself. The ramp suppresses the credit
+        // for small worker grids, where the measured panel fill costs more than the sharing saves:
+        // a 32x32 tile (16 workers) stays direct, while a 64x64 tile (64 workers) and larger keep
+        // their measured cooperative advantage.
+        double sharingFraction = 0.0;
+        if(plan.policy == GemmStaging::cooperative)
+        {
+            double const workers = static_cast<double>(plan.workerRows) * static_cast<double>(plan.workerCols);
+            double const directPanel = workers * (static_cast<double>(plan.threadM) + plan.threadN);
+            double const stagedPanel = bm + bn;
+            double const saving = directPanel > 0.0 ? std::max(0.0, 1.0 - stagedPanel / directPanel) : 0.0;
+            double const ramp = std::clamp((workers - 16.0) / (64.0 - 16.0), 0.0, 1.0);
+            // Only claim the saving where the problem fills the block tile and the output grid still
+            // occupies the machine; a one-tile launch or a tiny problem keeps the direct path.
+            double const coverage = (bm > 0.0 ? effectiveM / bm : 0.0) * (bn > 0.0 ? effectiveN / bn : 0.0);
+            sharingFraction = ramp * saving * coverage * parallelFraction;
+        }
+
+        return 0.36 * usefulFraction + 0.22 * aiNorm + 0.12 * (1.0 - transferNorm) + 0.12 * parallelFraction
+               + 0.08 * (1.0 - pressure) + 0.10 * sharingFraction;
     }
 
     /** Validate one plan with the checks the launcher relies on.

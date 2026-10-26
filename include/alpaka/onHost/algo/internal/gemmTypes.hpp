@@ -66,8 +66,9 @@ namespace alpaka::onHost
      * panel per K block in block-shared memory and reads the register-blocked outer product from there. asynchronous
      * is reserved: it selects the same bounded pipeline and currently executes the synchronous implementation, so it
      * becomes distinct only when a capable, tested asynchronous copy primitive is available. automatic resolves to
-     * the compile-time configuration value @ref internal::defaultGemmStaging, so the shipped default is the direct
-     * path and no measurement is required to select it.
+     * the compile-time configuration value @ref internal::defaultGemmStaging, which is `automatic`: the planner ranks
+     * direct and cooperative candidates and keeps direct wherever the measured sharing gain does not cover the panel
+     * fill (one-worker host plans, tiny or skinny problems, and small block tiles).
      */
     enum class GemmStaging : std::uint8_t
     {

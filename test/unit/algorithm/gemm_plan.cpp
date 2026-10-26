@@ -388,8 +388,13 @@ TEST_CASE("gemm plan candidate family is bounded", "[gemm][plan]")
             GemmFacts const facts = makeFacts(target, mode);
             GemmCandidateFamily const family = familyOf(facts);
             REQUIRE(family.size <= onHost::internal::maxPlanCandidates);
-            std::uint32_t const expected = target.maxThreadsPerBlock >= 16u ? 64u : 32u;
-            CHECK(family.size == expected);
+            // A one-thread target keeps only the one-worker groups; a target with more workers adds
+            // the wide and reuse-oriented groups. Every added candidate must stay inside the cap.
+            CHECK(family.size > 0u);
+            if(target.maxThreadsPerBlock >= 16u)
+                CHECK(family.size > 32u);
+            else
+                CHECK(family.size < 32u);
 
             // The minimal fallback is first and is a legal, direct plan for the smallest shapes.
             GemmPlan const& fallback = family.candidates[0];

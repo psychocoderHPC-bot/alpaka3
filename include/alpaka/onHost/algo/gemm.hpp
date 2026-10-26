@@ -36,8 +36,9 @@ namespace alpaka::onHost
      * @param mode numerical mode, defaults to strict FP32
      * @param kernel multiply-accumulate implementation, defaults to the M3 register-blocked outer-product path
      * @param staging operand supply policy of the register-blocked path, defaults to the compile-time configuration
-     *        value (the direct global-load path). The cooperative policy stages each K block in block-shared memory
-     *        and rejects a request whose bounded scratch exceeds the device's shared-memory limit.
+     *        value (`automatic`, which ranks direct against cooperative). The cooperative policy stages each K block
+     *        in block-shared memory and rejects a request whose bounded scratch exceeds the device's shared-memory
+     *        limit.
      * @param planOverride optional expert plan. It is validated with the same legality checks as an automatic plan
      *        and throws std::invalid_argument with the exact reason instead of launching an illegal configuration.
      *
