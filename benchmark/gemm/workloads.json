@@ -1,0 +1,75 @@
+{
+  "schema_version": "1.0.0",
+  "kind": "alpaka3-gemm-workload-manifest",
+  "frozen": true,
+  "freeze_note": "Shapes are frozen before any optimization work starts. Changing a shape, a required target set, or a numerical mode after freezing invalidates prior measured evidence and requires a new manifest schema_version.",
+  "shape_semantics": "Each entry describes C := alpha * op(A) * op(B) + beta * C with A: M x K, B: K x N, C: M x N. required_targets is a per-shape filter: an empty list means every target required by the acceptance requirements must run the shape, a non-empty list narrows the shape to those targets.",
+  "required_targets": [],
+  "numerical_modes": [
+    {"id": "fp32", "input": "fp32", "accumulate": "fp32", "output": "fp32", "note": "Strict FP32, no reduced-precision math mode."},
+    {"id": "fp64", "input": "fp64", "accumulate": "fp64", "output": "fp64", "note": "Strict FP64."},
+    {"id": "fp16_fp32", "input": "fp16", "accumulate": "fp32", "output": "fp32", "note": "FP16 inputs with FP32 accumulation and mandatory FP32 output."},
+    {"id": "bf16_fp32", "input": "bf16", "accumulate": "fp32", "output": "fp32", "note": "BF16 inputs with FP32 accumulation and mandatory FP32 output."}
+  ],
+  "transposes": [
+    {"id": "nn", "op_a": "none", "op_b": "none"},
+    {"id": "nt", "op_a": "none", "op_b": "transpose"},
+    {"id": "tn", "op_a": "transpose", "op_b": "none"},
+    {"id": "tt", "op_a": "transpose", "op_b": "transpose"}
+  ],
+  "stride_classes": [
+    {"id": "compact", "description": "Leading dimensions equal the logical extents: lda = K, ldb = N, ldc = N."},
+    {"id": "padded", "description": "Leading dimensions exceed the logical extents by a fixed element padding chosen by the driver, exercising non-contiguous rows and partial tile tails."}
+  ],
+  "alpha_beta_cases": [
+    {"id": "alpha1_beta0", "alpha": 1.0, "beta": 0.0, "note": "Old C is not read; the output is overwritten."},
+    {"id": "alpha1_beta1", "alpha": 1.0, "beta": 1.0, "note": "Accumulates into C; repetitions need an independent or reset output buffer."},
+    {"id": "alpha0p5_beta0p5", "alpha": 0.5, "beta": 0.5, "note": "Representative general alpha/beta epilogue."},
+    {"id": "alpha0_beta1", "alpha": 0.0, "beta": 1.0, "note": "A and B are not read when alpha is zero; C is unchanged."}
+  ],
+  "ci_fast_subset": {
+    "label": "bounded CI subset, not a release validation set",
+    "case_ids": ["square-64", "square-256", "rect-4096x256x1024", "small-k-2048x2048x32", "skinny-32x4096x1024", "boundary-127x129x65", "tiny-1x1x1", "tiny-31x17x33"],
+    "modes": ["fp32"],
+    "transposes": ["nn", "nt"],
+    "stride_classes": ["compact", "padded"],
+    "alpha_beta_cases": ["alpha1_beta0", "alpha1_beta1"]
+  },
+  "families": {
+    "square": [
+      {"id": "square-64", "m": 64, "n": 64, "k": 64, "ci_fast": true, "capacity_qualified": false, "required_targets": []},
+      {"id": "square-256", "m": 256, "n": 256, "k": 256, "ci_fast": true, "capacity_qualified": false, "required_targets": []},
+      {"id": "square-1024", "m": 1024, "n": 1024, "k": 1024, "ci_fast": false, "capacity_qualified": false, "required_targets": []},
+      {"id": "square-2048", "m": 2048, "n": 2048, "k": 2048, "ci_fast": false, "capacity_qualified": false, "required_targets": []},
+      {"id": "square-4096", "m": 4096, "n": 4096, "k": 4096, "ci_fast": false, "capacity_qualified": true, "required_targets": []}
+    ],
+    "rectangular": [
+      {"id": "rect-4096x256x1024", "m": 4096, "n": 256, "k": 1024, "ci_fast": true, "capacity_qualified": false, "required_targets": []},
+      {"id": "rect-256x4096x1024", "m": 256, "n": 4096, "k": 1024, "ci_fast": false, "capacity_qualified": false, "required_targets": []},
+      {"id": "rect-2048x512x4096", "m": 2048, "n": 512, "k": 4096, "ci_fast": false, "capacity_qualified": true, "required_targets": []},
+      {"id": "rect-512x2048x4096", "m": 512, "n": 2048, "k": 4096, "ci_fast": false, "capacity_qualified": true, "required_targets": []}
+    ],
+    "small_k": [
+      {"id": "small-k-2048x2048x8", "m": 2048, "n": 2048, "k": 8, "ci_fast": false, "capacity_qualified": false, "required_targets": []},
+      {"id": "small-k-2048x2048x32", "m": 2048, "n": 2048, "k": 32, "ci_fast": true, "capacity_qualified": false, "required_targets": []},
+      {"id": "small-k-2048x2048x64", "m": 2048, "n": 2048, "k": 64, "ci_fast": false, "capacity_qualified": false, "required_targets": []}
+    ],
+    "skinny": [
+      {"id": "skinny-1x4096x1024", "m": 1, "n": 4096, "k": 1024, "ci_fast": false, "capacity_qualified": false, "required_targets": []},
+      {"id": "skinny-32x4096x1024", "m": 32, "n": 4096, "k": 1024, "ci_fast": true, "capacity_qualified": false, "required_targets": []},
+      {"id": "skinny-4096x1x1024", "m": 4096, "n": 1, "k": 1024, "ci_fast": false, "capacity_qualified": false, "required_targets": []},
+      {"id": "skinny-4096x32x1024", "m": 4096, "n": 32, "k": 1024, "ci_fast": false, "capacity_qualified": false, "required_targets": []}
+    ],
+    "boundaries": [
+      {"id": "boundary-127x129x65", "m": 127, "n": 129, "k": 65, "ci_fast": true, "capacity_qualified": false, "required_targets": []},
+      {"id": "boundary-513x511x257", "m": 513, "n": 511, "k": 257, "ci_fast": false, "capacity_qualified": false, "required_targets": []},
+      {"id": "boundary-1023x1025x1027", "m": 1023, "n": 1025, "k": 1027, "ci_fast": false, "capacity_qualified": false, "required_targets": []}
+    ],
+    "tiny": [
+      {"id": "tiny-1x1x1", "m": 1, "n": 1, "k": 1, "ci_fast": true, "capacity_qualified": false, "required_targets": []},
+      {"id": "tiny-8x8x8", "m": 8, "n": 8, "k": 8, "ci_fast": false, "capacity_qualified": false, "required_targets": []},
+      {"id": "tiny-16x32x7", "m": 16, "n": 32, "k": 7, "ci_fast": false, "capacity_qualified": false, "required_targets": []},
+      {"id": "tiny-31x17x33", "m": 31, "n": 17, "k": 33, "ci_fast": true, "capacity_qualified": false, "required_targets": []}
+    ]
+  }
+}

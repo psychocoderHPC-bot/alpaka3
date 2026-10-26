@@ -217,6 +217,24 @@ if(NOT _alpaka_TARGETS_EXTENDED)
         alpaka_set_compiler_options(HOST target alpaka_target_host "$<$<COMPILE_LANGUAGE:CXX>:SHELL:-fconcepts-diagnostics-depth=${alpaka_GCC_CONCEPT_DEPTH}>")
     endif()
 
+    ## The Intel C++ compilers (icx/icpx) at -O3 with the default FP model emit, once per
+    ## translation unit, `stmxcsr / orl $0x8040 / ldmxcsr`. That sets the FTZ and DAZ bits in
+    ## MXCSR and never restores them, so it is process-wide state: any translation unit compiled
+    ## with the default model flushes FP32 subnormals for the whole program. Stored FP16/BFloat16
+    ## GEMM inputs widen to exact FP32 values, and BF16 subnormals widen to FP32 subnormals, so
+    ## the exact conversion is lost as soon as one TU enables FTZ/DAZ.
+    ## A per-target flag is therefore insufficient: it reaches only TUs that link that target and
+    ## misses test entry points, Catch2 main and dependencies. Apply the pin at directory scope so
+    ## every C++ translation unit of this project's own targets gets it. Users who deliberately
+    ## want flush-to-zero keep it via alpaka_FAST_MATH=ON or alpaka_FTZ=ON.
+    if(
+        CMAKE_CXX_COMPILER_ID MATCHES "^(Intel|IntelLLVM)$"
+        AND NOT (alpaka_FAST_MATH STREQUAL "ON" OR alpaka_FTZ STREQUAL "ON")
+    )
+        add_compile_options("$<$<COMPILE_LANGUAGE:CXX>:-ffp-model=precise>")
+        message(STATUS "Intel C++ host compiler detected: pinned host FP32 semantics to -ffp-model=precise")
+    endif()
+
     ## HWLOC
     include(${_alpaka_CMAKE_DIR}/alpakaHwloc.cmake)
 

@@ -17,6 +17,7 @@
 #include "alpaka/SimdMask.hpp"
 #include "alpaka/Vec.hpp"
 #include "alpaka/cast.hpp"
+#include "alpaka/core/Float16.hpp"
 #include "alpaka/core/util.hpp"
 #include "alpaka/mem/Alignment.hpp"
 #include "alpaka/simd/concepts.hpp"
@@ -644,6 +645,21 @@ namespace alpaka
         struct GetValueType<alpaka::Simd<T_Type, T_width, T_Storage>>
         {
             using type = T_Type;
+        };
+
+        /* The 16 bit storage types can not be represented by a native SIMD library, use the generic array storage
+         * instead.
+         */
+        template<uint32_t T_width>
+        struct GetSimdStorageType<api::Host, Float16, T_width>
+        {
+            using type = internal::EmuSimd<Float16, T_width>;
+        };
+
+        template<uint32_t T_width>
+        struct GetSimdStorageType<api::Host, BFloat16, T_width>
+        {
+            using type = internal::EmuSimd<BFloat16, T_width>;
         };
     } // namespace trait
 

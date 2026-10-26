@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "alpaka/core/Float16.hpp"
 #include "alpaka/utility.hpp"
 #include "alpaka/vecConcepts.hpp"
 
@@ -109,6 +110,31 @@ namespace alpaka
      */
     template<typename T>
     using GetValueType_t = typename trait::GetValueType<T>::type;
+
+    // 16 bit storage types do not provide a ::value_type and are not fundamental types
+    template<>
+    struct trait::GetValueType<Float16>
+    {
+        using type = Float16;
+    };
+
+    template<>
+    struct trait::GetValueType<Float16 const>
+    {
+        using type = Float16 const;
+    };
+
+    template<>
+    struct trait::GetValueType<BFloat16>
+    {
+        using type = BFloat16;
+    };
+
+    template<>
+    struct trait::GetValueType<BFloat16 const>
+    {
+        using type = BFloat16 const;
+    };
 
     template<typename T>
     inline constexpr bool isKernelArgumentTriviallyCopyable_v = trait::IsKernelArgumentTriviallyCopyable<T>::value;

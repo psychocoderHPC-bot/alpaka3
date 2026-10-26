@@ -162,7 +162,8 @@ namespace alpaka::onAcc
 
             void operator()() const
             {
-                m_item.barrier();
+                // nd_item::barrier() is deprecated in SYCL 2020; the free function is equivalent.
+                sycl::group_barrier(m_item.get_group());
             }
         };
 
