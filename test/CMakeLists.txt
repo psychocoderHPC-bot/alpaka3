@@ -75,6 +75,14 @@ function(alpaka_add_test_target target_prefix folder)
                         PRIVATE Catch2::Catch2WithMain alpaka::alpaka alpaka::test
                     )
                     alpaka_finalize(${_test_target_name})
+                    if(_test_target_name STREQUAL "unit_test_algorithm_gemm_pipeline")
+                        # This target is CPU-only by design. Its state-machine test drives the
+                        # __host__ __device__ BoundedStagePipeline::run() with a host-only test double that
+                        # throws on illegal transitions; nvcc rejects the device instantiation of run() with
+                        # #20014-D under -Werror. Keep this one target out of CUDA/HIP device compilation.
+                        set_target_properties(${_test_target_name} PROPERTIES SOURCES ${source_file})
+                        set_source_files_properties(${source_file} PROPERTIES LANGUAGE CXX)
+                    endif()
                     # Opt-in host-native ISA for the GEMM tests only; other tests stay baseline.
                     if(_test_target_name MATCHES "^unit_test_algorithm_gemm")
                         alpaka_gemm_apply_native_isa(${_test_target_name})
