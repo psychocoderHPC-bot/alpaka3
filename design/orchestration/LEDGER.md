@@ -714,6 +714,11 @@ The compute hosts are now used by other users, so any new timing may be perturbe
 Resume later in a fresh session from Section 16. Treat every number recorded here as historical evidence that must be re-measured on a quiet host before being quoted again.
 Backup of the pre-append specification: /home/dev/alpaka3-gemm-design-guide.v2.backup-20261026T081620.md (sha256 d4343a98ef705a0255902dca3bc29157dcdd97760788e97f47b742a4f6e5b2eb).
 
+## POST-FREEZE ARRIVAL: late duplicate measurement (B5b), not authoritative
+B5b (a stale task) finally reported numbers at 3b8e3e2b on the fwk394 2080 Ti: 107.67 / 2144.28 / 3112.40 GF/s at 256/1024/2048, device line correct, clocks 1620-1905 MHz.
+Compare with B8 at the same tip/card: 107.2 / 2841.7 / 3505.2. So 1024^2 differs by ~25% and 2048^2 by ~11% between two runs days apart, with the host now shared.
+INTERPRETATION: exactly the variance the operator warned about. Do NOT use either figure as a settled number; the ratio conclusions (large shapes ~0.3 of vendor, small shapes ~0.05) hold in both runs, but absolute throughput must be re-measured on a quiet host before publication.
+
 ## Open risks
 - gh/API permission is uneven across worker profiles (explorer had no shell; T2/T4/T1 rely on `gh repo clone`).
 - Shallow /workspace history: ancestry claims must come from full clones.
